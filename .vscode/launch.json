@@ -8,7 +8,7 @@
             "module": "streamlit",
             "args": [
                 "run",
-                "app.py" // Replace "your_script.py" with the path to your Streamlit app
+                "dashboard.py" // Replace "your_script.py" with the path to your Streamlit app
             ],
             "console": "integratedTerminal"
         }

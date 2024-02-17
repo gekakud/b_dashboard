@@ -1,0 +1,17 @@
+credentials:
+  usernames:
+    admin:
+      email: 
+      name: admin
+      password: $2b$12$IIwDxsHH0ahI/..7HSaq.OGiH.b6/8kXtgZad0j0VDJpHgro5ndua # admin
+    rbriggs:
+      email: rbriggs@gmail.com
+      name: Rebecca Briggs
+      password: $2b$12$SVk1RmuJR.ly64.RG5eetu00OTj12908vOZZkK7QRt81h48xMul1m # def
+cookie:
+  expiry_days: 0
+  key: signature_key # Must be string
+  name: cookie_name
+preauthorized:
+  emails:
+  - melsby@gmail.com
