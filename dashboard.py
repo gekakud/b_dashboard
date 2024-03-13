@@ -29,9 +29,27 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import streamlit as st
+import requests
 
 st.set_page_config("Profiles", "👤")
 
+def fetch_questionnaire_data():
+    """Fetches JSON data from the provided URL."""
+    url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for non-2xx status codes
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"An error occurred while fetching data: {e}")
+        return None
+
+# Button to trigger data fetching
+if st.button("Fetch Questionnaire Data"):
+    data = fetch_questionnaire_data()
+    if data:
+        st.subheader("Questionnaire Details")
+        st.json(data)  # Display JSON data in a clear format
 
 @st.cache_data
 def get_profile_dataset(number_of_items: int = 100, seed: int = 0) -> pd.DataFrame:

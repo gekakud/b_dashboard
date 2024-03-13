@@ -1,6 +1,6 @@
 import streamlit as st
 from streamlit_authenticator import Authenticate
-
+from dashboard import *
 
 # Access secrets. # Use the secrets, e.g., to connect to a database
 db_user = st.secrets["database"]["user"]
@@ -26,6 +26,11 @@ name, authentication_status, username = authenticator.login('main')
 if authentication_status:
     st.write(f'Welcome *{name}*!')
     # Your app's main functionality goes here
+    if st.button("Fetch Questionnaire Data"):
+        data = fetch_questionnaire_data()
+        if data:
+            st.subheader("Questionnaire Details")
+            st.json(data)  # Display JSON data in a clear format
 
     # Logout button
     if st.button('Logout'):
