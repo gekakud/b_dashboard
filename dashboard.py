@@ -1,139 +1,120 @@
-#  Int
-# אינדקס
-# string
-# מזהה משתתף
-# string
-# כינוי / שם ???
-
-
-# bool
-# אמפטיקה
-# int
-# אירועים
-
-# int
-# מילוי שאלונים
-# int
-# מצב בטריה אמפטיקה
-# Int
-# מצב בטריה סלולרי
-# Datetime
-# קשר אחרון
-# string
-# מלווה
-
-
-import random
-from datetime import date
-
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
+import random
+from faker import Faker
 import requests
 
-st.set_page_config("Profiles", "👤")
+# Cache this function to prevent Streamlit from running it every time the app rerenders.
+@st.cache_data
+def get_profile_dataset(number_of_items: int = 20):
+    """Generates a dataset of fake profiles using the Faker library."""
+    Faker.seed(0)  # Ensures consistent results on app reloads
+    fake = Faker()  # Create a Faker generator
+    data = []
+    
+    # Generate fake profile data
+    for _ in range(number_of_items):
+        profile = fake.profile(fields=['name', 'username', 'sex', 'ssn'])
+        data.append({
+            "Name": profile['name'],
+            "Nickname": profile['username'],
+            "Gender": profile['sex'],
+            "ID": profile['ssn'],
+            "Empatica Connected": random.choice([True, False]),
+            "Events 24h": np.random.randint(0, 15),
+            "Battery Status": round(random.uniform(0, 100), 2),
+            "Daily Activity": np.random.randint(0, 2, 24),
+        })
+
+    # Create a DataFrame from the generated data
+    df = pd.DataFrame(data)
+    df["Gender"] = df["Gender"].astype("category")  # Set 'Gender' as a category type for efficient storage
+    return df
+
+def send_notification_to_backend(user_nickname, questionnaire_option):
+    """Sends a push notification request to a specified backend URL."""
+    backend_url = 'https://your-backend-service.com/notifications/send'  # URL of your notification service backend
+    payload = {
+        'user_nickname': user_nickname,
+        'questionnaire_option': questionnaire_option
+    }
+    try:
+        response = requests.post(backend_url, json=payload)  # Send the POST request
+        # Handle response
+        if response.status_code == 200:
+            return True, "Notification sent successfully!"
+        else:
+            return False, "Failed to send notification."
+    except Exception as e:
+        return False, str(e)
 
 def fetch_questionnaire_data():
-    """Fetches JSON data from the provided URL."""
+    """Fetches questionnaire data from a predefined URL."""
     url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
     try:
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an error for non-2xx status codes
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"An error occurred while fetching data: {e}")
+        response = requests.get(url)  # Attempt to GET the data
+        # Handle response
+        if response.ok:
+            return response.json()
+        else:
+            return None
+    except Exception:
         return None
 
-# Button to trigger data fetching
-if st.button("Fetch Questionnaire Data"):
-    data = fetch_questionnaire_data()
-    if data:
-        st.subheader("Questionnaire Details")
-        st.json(data)  # Display JSON data in a clear format
-
-@st.cache_data
-def get_profile_dataset(number_of_items: int = 100, seed: int = 0) -> pd.DataFrame:
-    new_data = []
-
-    def calculate_age(born):
-        today = date.today()
-        return (
-            today.year - born.year - ((today.month, today.day) < (born.month, born.day))
-        )
-
-    from faker import Faker
-
-    fake = Faker()
-    random.seed(seed)
-    Faker.seed(seed)
-
-    for i in range(number_of_items):
-        profile = fake.profile()
-        new_data.append(
-            {
-                "name": profile["name"],
-                "nickname": profile["username"],
-                "gender": random.choice(["male", "female", "other", None]),
-                "id": profile["ssn"],
-                "emp_connected": random.choice([True, False]),
-                "events_24h": np.random.randint(0, 15),
-                "battery_status": round(random.uniform(0, 100), 2),
-
-                "daily_activity": np.random.randint(0, 2, 24),
-            }
-        )
-
-    profile_df = pd.DataFrame(new_data)
-    profile_df["gender"] = profile_df["gender"].astype("category")
-    return profile_df
-
-
-column_configuration = {
-    "name": st.column_config.TextColumn(
-        "User Name", help="The name of the user", max_chars=100
-    ),
-    "nickname": st.column_config.TextColumn(
-        "User Nickname", help="The nickname of the user", max_chars=100
-    ),
-    "gender": st.column_config.SelectboxColumn(
-        "Gender", options=["male", "female", "other"]
-    ),
-    "id": st.column_config.TextColumn(
-        "User ID", help="The id of the user", max_chars=20
-    ),
-    "emp_connected": st.column_config.CheckboxColumn("Empatica connected?", help="Is the user active?"),
-    "events_24h": st.column_config.NumberColumn(
-            "Events (24h)",
-            min_value=0,
-            max_value=100,
-            format="%d events",
-            help="The user's events for last 24 hours",
-    ),
-    "battery_status": st.column_config.ProgressColumn(
-        "Battery", min_value=0, max_value=100, format="%d"
-    ),
-
-
-    "daily_activity": st.column_config.BarChartColumn(
-        "Activity (daily)",
-        help="The user's activity in the last 25 days",
-        width="medium",
-        y_min=0,
-        y_max=1,
-    ),
+def show_dashboard():
+    """Main function to display the Streamlit dashboard."""
     
-}
+    st.subheader("Profile Data")
+    
+    # Configuration for displaying each column in the DataFrame
+    column_configuration = {
+        # Configure columns with specific attributes for better UI/UX
+        "Name": st.column_config.TextColumn("User Name", help="The name of the user", max_chars=50),
+        "Nickname": st.column_config.TextColumn("User Nickname", help="The nickname of the user", max_chars=100),
+        "Gender": st.column_config.SelectboxColumn("Gender", width="small", options=["male", "female", "other"]),
+        "ID": st.column_config.TextColumn("User ID", width="small", help="The id of the user", max_chars=20),
+        "Empatica Connected": st.column_config.CheckboxColumn("Empatica connected?", width="small", help="Is the user active?"),
+        "Events 24h": st.column_config.NumberColumn("Events (24h)", width="small", min_value=0, max_value=100, format="%d events", help="The user's events for last 24 hours"),
+        "Battery Status": st.column_config.ProgressColumn("Battery", width="small", min_value=0, max_value=100, format="%d"),
+        "Daily Activity": st.column_config.BarChartColumn(label="Activity(daily)", width=None, help="The user's activity in the last 25 days", y_min=0, y_max=1),
+    }
+    
+    df = get_profile_dataset()
+    
+    # Display the data editor with custom column configurations
+    st.data_editor(
+        df,
+        column_config=column_configuration,
+        hide_index=True,
+        num_rows="fixed",
+    )
+    
+    # User selection UI for notifications
+    user_options = df['Nickname'].tolist()
+    selected_user = st.selectbox("Select User for Notification", user_options)
 
-data = get_profile_dataset()
+    # Questionnaire selection UI
+    questionnaire_options = ["Option 1", "Option 2", "Option 3", "Option 4", "Option 5"]
+    selected_questionnaire = st.selectbox("Select Questionnaire Option", questionnaire_options)
 
-# Display the dataframe and allow the user to stretch the dataframe
-st.checkbox("Use container width", value=False, key="use_container_width")
+    # Button and logic to send notification
+    if st.button("Send Notification"):
+        success, message = send_notification_to_backend(selected_user, selected_questionnaire)
+        if success:
+            st.success(message)
+        else:
+            st.error(message)
 
+    # Button and logic to fetch questionnaire data
+    if st.button("Fetch Questionnaire Data"):
+        data = fetch_questionnaire_data()
+        if data:
+            questionnaire_df = pd.DataFrame(data)
+            st.subheader("Questionnaire Details")
+            st.dataframe(questionnaire_df)  # Display questionnaire data as a DataFrame
+        else:
+            st.write("Failed to fetch data or no data available.")
 
-st.data_editor(
-    data,
-    column_config=column_configuration,
-    use_container_width=st.session_state.use_container_width,
-    hide_index=True,
-    num_rows="fixed",
-)
+if __name__ == "__main__":
+    show_dashboard()

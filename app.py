@@ -1,14 +1,16 @@
 import streamlit as st
+
+# The very first command in the script:
+st.set_page_config(page_title="Login Page", page_icon="🔑")
+
 from streamlit_authenticator import Authenticate
-from dashboard import *
-
-# Access secrets. # Use the secrets, e.g., to connect to a database
-db_user = st.secrets["database"]["user"]
-db_password = st.secrets["database"]["password"]
-
-
 import yaml
 from yaml.loader import SafeLoader
+
+# Assuming dashboard.show_dashboard does not call st.set_page_config itself
+from dashboard import show_dashboard
+
+# Continue with the rest of your script after setting the page config
 with open('config.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
 
@@ -20,25 +22,12 @@ authenticator = Authenticate(
     config['preauthorized']
 )
 
-# Display login form and authenticate user
 name, authentication_status, username = authenticator.login('main')
 
 if authentication_status:
-    st.write(f'Welcome *{name}*!')
-    # Your app's main functionality goes here
-    if st.button("Fetch Questionnaire Data"):
-        data = fetch_questionnaire_data()
-        if data:
-            st.subheader("Questionnaire Details")
-            st.json(data)  # Display JSON data in a clear format
-
-    # Logout button
-    if st.button('Logout'):
-        authenticator.logout('main')
-        st.write('You have been logged out.')
-
+    st.success(f'Welcome {name}!')
+    show_dashboard()
 elif authentication_status == False:
     st.error('Username/password is incorrect')
-
 elif authentication_status == None:
     st.warning('Please enter your username and password')

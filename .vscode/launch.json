@@ -8,8 +8,8 @@
             "module": "streamlit",
             "args": [
                 "run",
-              //  "app.py" // Replace "your_script.py" with the path to your Streamlit app
-              "dashboard.py"
+                "app.py" // Starts the login process without continuing now fot the "main"
+            //    "dashboard.py" // Run dashboard and not the app.py to skip the login
 
             ],
             "console": "integratedTerminal"
