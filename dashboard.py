@@ -5,6 +5,8 @@ import random
 from faker import Faker
 import requests
 from twilio.rest import Client
+from private_config import *
+
 
 # Cache this function to prevent Streamlit from running it every time the app rerenders.
 @st.cache_data
@@ -64,8 +66,6 @@ def fetch_questionnaire_data():
         return None
 
 def send_whatsapp_message():
-    account_sid = 'ACfe4b431725d4b1422f1a6152f67bacb0'
-    auth_token = '17a9b41826dedff03c8e0b0ce0ccbd52'  # Replace with your actual auth token
     client = Client(account_sid, auth_token)
     try:
         message = client.messages.create(
