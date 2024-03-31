@@ -1,7 +1,8 @@
 import streamlit as st
 
 # The very first command in the script:
-st.set_page_config(page_title="Login Page", page_icon="🔑")
+#st.set_page_config(page_title="Booggii", page_icon="❤️"/Users/alongetz/Library/CloudStorage/GoogleDrive-alon.getz@gmail.com/My Drive/GTS/Rafael-PTSD)
+st.set_page_config(page_title="Booggii", page_icon="/Users/alongetz/Library/CloudStorage/GoogleDrive-alon.getz@gmail.com/My Drive/GTS/Rafael-PTSD/ptsd-icon.png")
 
 from streamlit_authenticator import Authenticate
 import yaml

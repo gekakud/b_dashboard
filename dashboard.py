@@ -4,6 +4,7 @@ import numpy as np
 import random
 from faker import Faker
 import requests
+from twilio.rest import Client
 
 # Cache this function to prevent Streamlit from running it every time the app rerenders.
 @st.cache_data
@@ -62,6 +63,21 @@ def fetch_questionnaire_data():
     except Exception:
         return None
 
+def send_whatsapp_message():
+    account_sid = 'ACfe4b431725d4b1422f1a6152f67bacb0'
+    auth_token = '17a9b41826dedff03c8e0b0ce0ccbd52'  # Replace with your actual auth token
+    client = Client(account_sid, auth_token)
+    try:
+        message = client.messages.create(
+            from_='whatsapp:+14155238886',  # Your Twilio WhatsApp number
+            body='ניסיון שני',  # Message you want to send
+            to='whatsapp:+972545485895'  # Recipient's number
+        )
+        return True, message.sid
+    except Exception as e:
+        return False, str(e)
+
+
 def show_dashboard():
     """Main function to display the Streamlit dashboard."""
     
@@ -95,7 +111,7 @@ def show_dashboard():
     selected_user = st.selectbox("Select User for Notification", user_options)
 
     # Questionnaire selection UI
-    questionnaire_options = ["Option 1", "Option 2", "Option 3", "Option 4", "Option 5"]
+    questionnaire_options = ["'הפעלת שאלון 'חשד לאירוע", "Option 2", "Option 3", "Option 4", "Option 5"]
     selected_questionnaire = st.selectbox("Select Questionnaire Option", questionnaire_options)
 
     # Button and logic to send notification
@@ -115,6 +131,15 @@ def show_dashboard():
             st.dataframe(questionnaire_df)  # Display questionnaire data as a DataFrame
         else:
             st.write("Failed to fetch data or no data available.")
+            
+    # Add functionality to send "Hi" via WhatsApp
+    if st.button("Send 'Hi' via WhatsApp"):
+        success, response = send_whatsapp_message()
+        if success:
+            st.success(f"Message sent successfully! Message SID: {response}")
+        else:
+            st.error(f"Failed to send message. Error: {response}")
+
 
 if __name__ == "__main__":
     show_dashboard()
