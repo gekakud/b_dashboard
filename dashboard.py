@@ -6,7 +6,31 @@ from faker import Faker
 import requests
 from twilio.rest import Client
 from private_config import *
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import messaging
 
+
+# Initialize the Firebase Admin SDK
+cred_path = '/Users/alongetz/Downloads/booggii-5895-firebase-adminsdk-rnglh-2974cf81b1.json'  
+if not firebase_admin._apps:
+    cred = credentials.Certificate(cred_path)
+    firebase_admin.initialize_app(cred)
+
+
+# Function to send a push notification
+def send_firebase_notification(token, title, body):
+    # Create the message
+    message = messaging.Message(
+        notification=messaging.Notification(
+            title=title,
+            body=body,
+        ),
+        token=token,
+    )
+    # Send the message
+    response = messaging.send(message)
+    return response
 
 # Cache this function to prevent Streamlit from running it every time the app rerenders.
 @st.cache_data
@@ -52,9 +76,11 @@ def send_notification_to_backend(user_nickname, questionnaire_option):
     except Exception as e:
         return False, str(e)
 
-def fetch_questionnaire_data():
+def fetch_events_data():
     """Fetches questionnaire data from a predefined URL."""
-    url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
+ #   url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
+ #   url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/questionnaire/"
+    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/events/"
     try:
         response = requests.get(url)  # Attempt to GET the data
         # Handle response
@@ -65,6 +91,20 @@ def fetch_questionnaire_data():
     except Exception:
         return None
 
+def fetch_questionnaire_data():
+    """Fetches questionnaire data from a predefined URL."""
+ #   url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
+    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/questionnaire/"
+    try:
+        response = requests.get(url)  # Attempt to GET the data
+        # Handle response
+        if response.ok:
+            return response.json()
+        else:
+            return None
+    except Exception:
+        return None
+    
 def send_whatsapp_message():
     client = Client(account_sid, auth_token)
     try:
@@ -106,23 +146,65 @@ def show_dashboard():
         num_rows="fixed",
     )
     
-    # User selection UI for notifications
-    user_options = df['Nickname'].tolist()
-    selected_user = st.selectbox("Select User for Notification", user_options)
+    # Fetch and display event data automatically
+    event_data = fetch_events_data()
+    if event_data:
+        events_df = pd.DataFrame(event_data)
+        st.subheader("Events Details")
+        st.dataframe(events_df)  # Display events data as a DataFrame
+    else:
+        st.error("Failed to fetch data or no data available.")
+        
+    # Horizontal line as a divider
+    st.markdown("<hr>", unsafe_allow_html=True)
+ 
+    # Use columns to lay out the selectors and button
+    col1, col2, col3 = st.columns(3, gap="small")
 
-    # Questionnaire selection UI
-    questionnaire_options = ["'הפעלת שאלון 'חשד לאירוע", "Option 2", "Option 3", "Option 4", "Option 5"]
-    selected_questionnaire = st.selectbox("Select Questionnaire Option", questionnaire_options)
+    with col1:
+        # Dropdown for user selection
+        user_options = df['Nickname'].tolist()
+        selected_user = st.selectbox("Select User for Notification", user_options)
 
-    # Button and logic to send notification
-    if st.button("Send Notification"):
-        success, message = send_notification_to_backend(selected_user, selected_questionnaire)
-        if success:
-            st.success(message)
-        else:
-            st.error(message)
+    with col2:
+        # Dropdown for questionnaire selection
+        questionnaire_options = ["Option 1", "Option 2", "Option 3", "Option 4", "Option 5"]
+        selected_questionnaire = st.selectbox("Select Questionnaire Option", questionnaire_options)
+
+    with col3:
+        # Custom CSS to adjust the button's vertical position
+        st.markdown("""
+        <style>
+        div.stButton > button {
+            margin-top: 12px;  
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        # Button to send notification
+        if st.button("Send App Notification"):
+            # Presuming you have defined `fcm_token` and `send_firebase_notification` somewhere above
+            if fcm_token:
+                try:
+                    title = selected_user  # Set the notification title
+                    body = selected_questionnaire  # Set the notification body
+                    response = send_firebase_notification(fcm_token, title, body)
+                    st.success(f'Firebase Notification sent! Response: {response}')
+                except Exception as e:
+                    st.error(f'Failed to send Firebase notification. Error: {str(e)}')
+
+    # Horizontal line as a divider
+    st.markdown("<hr>", unsafe_allow_html=True)
 
     # Button and logic to fetch questionnaire data
+    # if st.button("Fetch Events Data"):
+    #     data = fetch_events_data()
+    #     if data:
+    #         questionnaire_df = pd.DataFrame(data)
+    #         st.subheader("Events Details")
+    #         st.dataframe(questionnaire_df)  # Display events data as a DataFrame
+    #     else:
+    #         st.write("Failed to fetch data or no data available.")
+    
     if st.button("Fetch Questionnaire Data"):
         data = fetch_questionnaire_data()
         if data:
@@ -131,7 +213,7 @@ def show_dashboard():
             st.dataframe(questionnaire_df)  # Display questionnaire data as a DataFrame
         else:
             st.write("Failed to fetch data or no data available.")
-            
+        
     # Add functionality to send "Hi" via WhatsApp
     if st.button("Send 'Hi' via WhatsApp"):
         success, response = send_whatsapp_message()
