@@ -18,19 +18,20 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 
-# Function to send a push notification
-def send_firebase_notification(token, title, body):
-    # Create the message
+def send_firebase_notification(token, title, body, data=None):
+    # Create the message with an optional data payload
     message = messaging.Message(
         notification=messaging.Notification(
             title=title,
             body=body,
         ),
+        data=data,  # Add custom data payload to the message
         token=token,
     )
     # Send the message
     response = messaging.send(message)
     return response
+
 
 # Cache this function to prevent Streamlit from running it every time the app rerenders.
 @st.cache_data
@@ -59,8 +60,9 @@ def get_profile_dataset(number_of_items: int = 20):
     df["Gender"] = df["Gender"].astype("category")  # Set 'Gender' as a category type for efficient storage
     return df
 
+
+"""Sends a push notification request to a specified backend URL."""
 def send_notification_to_backend(user_nickname, questionnaire_option):
-    """Sends a push notification request to a specified backend URL."""
     backend_url = 'https://your-backend-service.com/notifications/send'  # URL of your notification service backend
     payload = {
         'user_nickname': user_nickname,
@@ -76,10 +78,8 @@ def send_notification_to_backend(user_nickname, questionnaire_option):
     except Exception as e:
         return False, str(e)
 
+"""Fetches events data from a predefined URL."""
 def fetch_events_data():
-    """Fetches questionnaire data from a predefined URL."""
- #   url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
- #   url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/questionnaire/"
     url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/events/"
     try:
         response = requests.get(url)  # Attempt to GET the data
@@ -91,9 +91,8 @@ def fetch_events_data():
     except Exception:
         return None
 
+"""Fetches questionnaire data from a predefined URL."""
 def fetch_questionnaire_data():
-    """Fetches questionnaire data from a predefined URL."""
- #   url = "https://virtserver.swaggerhub.com/YoadGidron/Booggii/1.0.2/questionnaire"
     url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/questionnaire/"
     try:
         response = requests.get(url)  # Attempt to GET the data
@@ -104,66 +103,176 @@ def fetch_questionnaire_data():
             return None
     except Exception:
         return None
-    
-def send_whatsapp_message():
-    client = Client(account_sid, auth_token)
+
+def fetch_participants_data():
+    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/participants/"  
     try:
-        message = client.messages.create(
-            from_='whatsapp:+14155238886',  # Your Twilio WhatsApp number
-            body='ניסיון שני',  # Message you want to send
-            to='whatsapp:+972545485895'  # Recipient's number
-        )
-        return True, message.sid
+        response = requests.get(url)
+        if response.ok:
+            data = response.json()
+            # Normalize the column names here, for example:
+            for entry in data:
+                # Normalize datetime columns to one format
+                entry['created_at'] = entry.pop('createdAt', entry.get('created_at', ''))
+                entry['updated_at'] = entry.pop('updatedAt', entry.get('updated_at', ''))
+                entry['empatica_status'] = entry.pop('empaticaStatus', entry.get('empatica_status', ''))
+                entry['num_of_events_current_date'] = entry.pop('numOfEventsCurrentDate', entry.get('num_of_events_current_date', ''))
+                # Normalize boolean columns to one format
+                entry['is_active'] = entry.pop('isActive', entry.get('is_active', ''))
+                # Remove the camelCase keys if they exist
+                entry.pop('createdAt', None)
+                entry.pop('updatedAt', None)
+                entry.pop('isActive', None)
+                entry.pop('numOfEventsCurrentDate', None)
+                entry.pop('empaticaStatusß', None)
+            return data
+        else:
+            return None
     except Exception as e:
-        return False, str(e)
+        return None
+
+"""Transforms the questionnaire data to the desired format and creates a timetable."""
+def transform_questionnaire_data(questionnaire_data):
+    # Convert to DataFrame
+    df = pd.DataFrame(questionnaire_data)
+    
+    # Map 'num' to 'Question Number' and 'type' to 'Type'
+    df.rename(columns={'num': 'מס שאלה', 'type': 'סוג', 'question': 'השאלה'}, inplace=True)
+    
+    # Assuming 'days' are 1 (Sunday) to 7 (Saturday)
+    days_of_week = {1: 'Sunday', 2: 'Monday', 3: 'Tuesday', 
+                    4: 'Wednesday', 5: 'Thursday', 6: 'Friday', 7: 'Saturday'}
+    
+    # Define hours and format them with ':00'
+    hours = ['10:00', '14:00', '18:00']
+    
+    # Create the timetable DataFrame with slots for each day and formatted hour
+    timetable = pd.DataFrame(index=hours, columns=days_of_week.values())
+    timetable = timetable.fillna('')  # Initialize cells with empty string
+
+    # Populate the timetable with question numbers based on 'days' and 'hours' lists
+    for index, row in df.iterrows():
+        question_number = row['מס שאלה']
+        for day in row['days']:
+            day_name = days_of_week.get(day)
+            for hour in row['hours']:
+                hour_str = f'{hour}:00'  # Format hour as string with minutes
+                cell_value = timetable.at[hour_str, day_name]
+                if str(question_number) not in cell_value.split(', '):
+                    if cell_value == '':
+                        timetable.at[hour_str, day_name] = str(question_number)
+                    else:
+                        timetable.at[hour_str, day_name] += f', {question_number}'
+
+    # Select only the columns we need for the final display
+    df = df[['סוג', 'השאלה', 'מס שאלה']]
+
+    return df, timetable
+
+
+# Function to post data to the API endpoint
+def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
+    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/participants/"
+    payload = {
+        "nickName": nickName,
+        "phone": phone,
+        "empaticaId": empaticaId,
+        "firebaseId": firebaseId
+    }
+    headers = {
+        'Content-Type': 'application/json'
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    return response
+
+
+
+def add_participant_form(form_expander):
+    with st.form("new_participant_form"):
+        nickName = st.text_input("Nickname")
+        phone = st.text_input("Phone")
+        empaticaId = st.text_input("Empatica ID")
+        firebaseId = st.text_input("Firebase ID")
+        submit_button = st.form_submit_button("Submit")
+
+        if submit_button:
+            # Make the POST request here with the form data
+            response = add_participant_to_db(nickName, phone, empaticaId, submit_button)
+
+            if response.status_code == 201:
+                st.success("Participant added successfully!")
+                # This line will hide the expander/form after submission
+                form_expander.empty()
+            else:
+                st.error(f"Failed to add participant. Status code: {response.status_code}")
 
 
 def show_dashboard():
     """Main function to display the Streamlit dashboard."""
-    
-    st.subheader("Profile Data")
-    
-    # Configuration for displaying each column in the DataFrame
-    column_configuration = {
-        # Configure columns with specific attributes for better UI/UX
-        "Name": st.column_config.TextColumn("User Name", help="The name of the user", max_chars=50),
-        "Nickname": st.column_config.TextColumn("User Nickname", help="The nickname of the user", max_chars=100),
-        "Gender": st.column_config.SelectboxColumn("Gender", width="small", options=["male", "female", "other"]),
-        "ID": st.column_config.TextColumn("User ID", width="small", help="The id of the user", max_chars=20),
-        "Empatica Connected": st.column_config.CheckboxColumn("Empatica connected?", width="small", help="Is the user active?"),
-        "Events 24h": st.column_config.NumberColumn("Events (24h)", width="small", min_value=0, max_value=100, format="%d events", help="The user's events for last 24 hours"),
-        "Battery Status": st.column_config.ProgressColumn("Battery", width="small", min_value=0, max_value=100, format="%d"),
-        "Daily Activity": st.column_config.BarChartColumn(label="Activity(daily)", width=None, help="The user's activity in the last 25 days", y_min=0, y_max=1),
-    }
-    
-    df = get_profile_dataset()
-    
-    # Display the data editor with custom column configurations
-    st.data_editor(
-        df,
-        column_config=column_configuration,
-        hide_index=True,
-        num_rows="fixed",
-    )
-    
-    # Fetch and display event data automatically
-    event_data = fetch_events_data()
-    if event_data:
-        events_df = pd.DataFrame(event_data)
-        st.subheader("Events Details")
-        st.dataframe(events_df)  # Display events data as a DataFrame
+
+    st.subheader("Participants Data")
+
+    # Fetch real participant data from the API
+    participant_data = fetch_participants_data()
+    if participant_data:
+        # Convert the participant data to a pandas DataFrame
+        participant_df = pd.DataFrame(participant_data)
+        
+        # Reorder the columns to make nickName the first column
+        column_order = ['nickName'] + [col for col in participant_df.columns if col != 'nickName']
+        participant_df = participant_df[column_order]
+
+        # Display the DataFrame in Streamlit, without the index
+        st.dataframe(participant_df, use_container_width=True, hide_index=True)
+
     else:
-        st.error("Failed to fetch data or no data available.")
+        st.error("Failed to fetch participants data.")
+        
+    
+    # Add a button that shows the form when clicked
+    form_expander = st.expander("Add New Participant")
+    
+    with form_expander:
+        add_participant_form(form_expander)
+
+    # Horizontal line as a divider
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    st.subheader("Events Data")
+
+   # At the beginning of your show_dashboard() function, add a placeholder
+    events_placeholder = st.empty()
+
+    # Function to display the events data
+    def display_events_data():
+        event_data = fetch_events_data()
+        if event_data:
+            events_df = pd.DataFrame(event_data)
+            events_df['timestamp'] = pd.to_datetime(events_df['timestamp'])
+            events_df_sorted = events_df.sort_values(by='timestamp', ascending=False)
+            # Use the placeholder to display the DataFrame
+            events_placeholder.dataframe(events_df_sorted, use_container_width=True, hide_index=True)
+        else:
+            events_placeholder.error("Failed to fetch data or no data available.")
+
+    # Button to refresh event data
+    if st.button('Refresh Events'):
+        st.cache_data.clear()  # Clear the memoized cache
+
+    display_events_data()
+
         
     # Horizontal line as a divider
     st.markdown("<hr>", unsafe_allow_html=True)
+    
+    st.subheader("Push Notification")
  
     # Use columns to lay out the selectors and button
     col1, col2, col3 = st.columns(3, gap="small")
 
     with col1:
         # Dropdown for user selection
-        user_options = df['Nickname'].tolist()
+        user_options = participant_df['nickName'].tolist()
         selected_user = st.selectbox("Select User for Notification", user_options)
 
     with col2:
@@ -180,6 +289,12 @@ def show_dashboard():
         }
         </style>
         """, unsafe_allow_html=True)
+        
+        custom_data = {
+            "key1": "value1",
+            "key2": "value2",
+            # ... additional key-value pairs
+        }
         # Button to send notification
         if st.button("Send App Notification"):
             # Presuming you have defined `fcm_token` and `send_firebase_notification` somewhere above
@@ -187,7 +302,7 @@ def show_dashboard():
                 try:
                     title = selected_user  # Set the notification title
                     body = selected_questionnaire  # Set the notification body
-                    response = send_firebase_notification(fcm_token, title, body)
+                    response = send_firebase_notification(fcm_token, title, body, data=custom_data)
                     st.success(f'Firebase Notification sent! Response: {response}')
                 except Exception as e:
                     st.error(f'Failed to send Firebase notification. Error: {str(e)}')
@@ -195,33 +310,48 @@ def show_dashboard():
     # Horizontal line as a divider
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # Button and logic to fetch questionnaire data
-    # if st.button("Fetch Events Data"):
-    #     data = fetch_events_data()
-    #     if data:
-    #         questionnaire_df = pd.DataFrame(data)
-    #         st.subheader("Events Details")
-    #         st.dataframe(questionnaire_df)  # Display events data as a DataFrame
-    #     else:
-    #         st.write("Failed to fetch data or no data available.")
-    
-    if st.button("Fetch Questionnaire Data"):
-        data = fetch_questionnaire_data()
-        if data:
-            questionnaire_df = pd.DataFrame(data)
-            st.subheader("Questionnaire Details")
-            st.dataframe(questionnaire_df)  # Display questionnaire data as a DataFrame
-        else:
-            st.write("Failed to fetch data or no data available.")
+    # Automatically fetch and display questionnaire data
+    questionnaire_data = fetch_questionnaire_data()
+    if questionnaire_data:
+        # Transform and display questionnaire data
+        questionnaire_df, timetable_df = transform_questionnaire_data(questionnaire_data)
         
-    # Add functionality to send "Hi" via WhatsApp
-    if st.button("Send 'Hi' via WhatsApp"):
-        success, response = send_whatsapp_message()
-        if success:
-            st.success(f"Message sent successfully! Message SID: {response}")
-        else:
-            st.error(f"Failed to send message. Error: {response}")
+        st.subheader("Questionnaire Details")
+                
+        # Ensure that we reset the index before displaying and not include it in the DataFrame
+        st.dataframe(questionnaire_df, hide_index=True)
 
+        st.subheader("Timetable")
+        st.dataframe(timetable_df)  # Display timetable
+        
+    else:
+        st.error("Failed to fetch questionnaire data or no data available.")
 
 if __name__ == "__main__":
     show_dashboard()
+
+
+ #  st.subheader("Profile Data")
+    
+    # Configuration for displaying each column in the DataFrame
+    # column_configuration = {
+    #     # Configure columns with specific attributes for better UI/UX
+    #     "Name": st.column_config.TextColumn("User Name", help="The name of the user", max_chars=50),
+    #     "Nickname": st.column_config.TextColumn("User Nickname", help="The nickname of the user", max_chars=100),
+    #     "Gender": st.column_config.SelectboxColumn("Gender", width="small", options=["male", "female", "other"]),
+    #     "ID": st.column_config.TextColumn("User ID", width="small", help="The id of the user", max_chars=20),
+    #     "Empatica Connected": st.column_config.CheckboxColumn("Empatica connected?", width="small", help="Is the user active?"),
+    #     "Events 24h": st.column_config.NumberColumn("Events (24h)", width="small", min_value=0, max_value=100, format="%d events", help="The user's events for last 24 hours"),
+    #     "Battery Status": st.column_config.ProgressColumn("Battery", width="small", min_value=0, max_value=100, format="%d"),
+    #     "Daily Activity": st.column_config.BarChartColumn(label="Activity(daily)", width=None, help="The user's activity in the last 25 days", y_min=0, y_max=1),
+    # }
+    
+    # df = get_profile_dataset()
+    
+    # # Display the data editor with custom column configurations
+    # st.data_editor(
+    #     df,
+    #     column_config=column_configuration,
+    #     hide_index=True,
+    #     num_rows="fixed",
+    # )
