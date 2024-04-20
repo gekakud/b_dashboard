@@ -110,8 +110,10 @@ def fetch_participants_data():
         response = requests.get(url)
         if response.ok:
             data = response.json()
+            active_participants = [p for p in data if p.get('is_active', False) == True]  # Filter only active participants
+
             # Normalize the column names here, for example:
-            for entry in data:
+            for entry in active_participants:
                 # Normalize datetime columns to one format
                 entry['created_at'] = entry.pop('createdAt', entry.get('created_at', ''))
                 entry['updated_at'] = entry.pop('updatedAt', entry.get('updated_at', ''))
@@ -125,11 +127,28 @@ def fetch_participants_data():
                 entry.pop('isActive', None)
                 entry.pop('numOfEventsCurrentDate', None)
                 entry.pop('empaticaStatusß', None)
-            return data
+            return active_participants
         else:
             return None
     except Exception as e:
         return None
+    
+# Function to refresh and display participant data
+def refresh_and_display_participants(placeholder):
+    participant_data = fetch_participants_data()
+    if participant_data:
+        # Convert the participant data to a pandas DataFrame
+        participant_df = pd.DataFrame(participant_data)
+        # Reorder the columns to make nickName the first column
+        column_order = ['nickName'] + [col for col in participant_df.columns if col != 'nickName']
+        participant_df = participant_df[column_order]
+        # Use the original placeholder or expander to display the new dataframe
+        placeholder.dataframe(participant_df, use_container_width=True, hide_index=True)
+
+    else:
+        st.error("Failed to fetch participants data.")
+        
+
 
 """Transforms the questionnaire data to the desired format and creates a timetable."""
 def transform_questionnaire_data(questionnaire_data):
@@ -187,7 +206,7 @@ def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
 
 
 
-def add_participant_form(form_expander):
+def add_participant_form(form_expander,placeholder):
     with st.form("new_participant_form"):
         nickName = st.text_input("Nickname")
         phone = st.text_input("Phone")
@@ -203,37 +222,71 @@ def add_participant_form(form_expander):
                 st.success("Participant added successfully!")
                 # This line will hide the expander/form after submission
                 form_expander.empty()
+                refresh_and_display_participants(placeholder)  # Refresh the participant data
+
             else:
                 st.error(f"Failed to add participant. Status code: {response.status_code}")
 
 
+# Function to update participant data in the API
+def update_participant_to_db(patientId, nickName, phone, empaticaId, firebaseId, empaticaStatus, isActive):
+    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/participants/"
+    payload = {
+        "patientId": patientId,
+        "nickName": nickName,
+        "phone": phone,
+        "empaticaId": empaticaId,
+        "firebaseId": firebaseId,
+        "empaticaStatus": empaticaStatus,
+        "isActive": isActive
+    }
+    headers = {
+        'Content-Type': 'application/json'
+    }
+    response = requests.patch(url, json=payload, headers=headers)
+    return response
+
+# Function to update participant data in the API
+def update_participant_form(container,placeholder):
+    with st.form("update_participant_form"):
+        patientId = st.text_input("Patient ID")
+        nickName = st.text_input("Nickname")
+        phone = st.text_input("Phone")
+        empaticaId = st.text_input("Empatica ID")
+        firebaseId = st.text_input("Firebase ID")
+        empaticaStatus = st.selectbox("Empatica Status", [True, False])
+        isActive = st.selectbox("Is Active", [True, False])
+        submit_button = st.form_submit_button("Submit Update")
+
+        if submit_button:
+            response = update_participant_to_db(patientId, nickName, phone, empaticaId, firebaseId, empaticaStatus, isActive)
+            if response.status_code == 200:
+                st.success("Participant updated successfully!")
+                st.session_state['show_update_participant_form'] = False
+                container.empty()
+                refresh_and_display_participants(placeholder)  # Refresh the participant data
+            else:
+                st.error(f"Failed to update participant. Status code: {response.status_code}")
+
+
+
 def show_dashboard():
     """Main function to display the Streamlit dashboard."""
-
     st.subheader("Participants Data")
-
-    # Fetch real participant data from the API
-    participant_data = fetch_participants_data()
-    if participant_data:
-        # Convert the participant data to a pandas DataFrame
-        participant_df = pd.DataFrame(participant_data)
-        
-        # Reorder the columns to make nickName the first column
-        column_order = ['nickName'] + [col for col in participant_df.columns if col != 'nickName']
-        participant_df = participant_df[column_order]
-
-        # Display the DataFrame in Streamlit, without the index
-        st.dataframe(participant_df, use_container_width=True, hide_index=True)
-
-    else:
-        st.error("Failed to fetch participants data.")
-        
+    participants_placeholder = st.empty()
     
-    # Add a button that shows the form when clicked
-    form_expander = st.expander("Add New Participant")
+    # Fetch and display real participant data from the API
+    refresh_and_display_participants(participants_placeholder)
     
-    with form_expander:
-        add_participant_form(form_expander)
+    # Expander for adding new participant
+    with st.expander("Add New Participant"):
+        add_participant_form(st, participants_placeholder)
+    
+    # Expander for updating participant
+    with st.expander("Update Participant"):
+        update_participant_form(st, participants_placeholder)
+
+
 
     # Horizontal line as a divider
     st.markdown("<hr>", unsafe_allow_html=True)
@@ -321,7 +374,7 @@ def show_dashboard():
         # Ensure that we reset the index before displaying and not include it in the DataFrame
         st.dataframe(questionnaire_df, hide_index=True)
 
-        st.subheader("Timetable")
+        st.subheader("Questionnaire Timetable")
         st.dataframe(timetable_df)  # Display timetable
         
     else:
@@ -329,29 +382,3 @@ def show_dashboard():
 
 if __name__ == "__main__":
     show_dashboard()
-
-
- #  st.subheader("Profile Data")
-    
-    # Configuration for displaying each column in the DataFrame
-    # column_configuration = {
-    #     # Configure columns with specific attributes for better UI/UX
-    #     "Name": st.column_config.TextColumn("User Name", help="The name of the user", max_chars=50),
-    #     "Nickname": st.column_config.TextColumn("User Nickname", help="The nickname of the user", max_chars=100),
-    #     "Gender": st.column_config.SelectboxColumn("Gender", width="small", options=["male", "female", "other"]),
-    #     "ID": st.column_config.TextColumn("User ID", width="small", help="The id of the user", max_chars=20),
-    #     "Empatica Connected": st.column_config.CheckboxColumn("Empatica connected?", width="small", help="Is the user active?"),
-    #     "Events 24h": st.column_config.NumberColumn("Events (24h)", width="small", min_value=0, max_value=100, format="%d events", help="The user's events for last 24 hours"),
-    #     "Battery Status": st.column_config.ProgressColumn("Battery", width="small", min_value=0, max_value=100, format="%d"),
-    #     "Daily Activity": st.column_config.BarChartColumn(label="Activity(daily)", width=None, help="The user's activity in the last 25 days", y_min=0, y_max=1),
-    # }
-    
-    # df = get_profile_dataset()
-    
-    # # Display the data editor with custom column configurations
-    # st.data_editor(
-    #     df,
-    #     column_config=column_configuration,
-    #     hide_index=True,
-    #     num_rows="fixed",
-    # )
