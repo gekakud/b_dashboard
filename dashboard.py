@@ -325,8 +325,15 @@ def show_dashboard():
 
     with col1:
         # Dropdown for user selection
-        user_options = participant_df['nickName'].tolist()
-        selected_user = st.selectbox("Select User for Notification", user_options)
+        participant_data = fetch_participants_data()
+        if participant_data:
+        # Convert the participant data to a pandas DataFrame
+            participant_df = pd.DataFrame(participant_data)
+            user_options = participant_df['nickName'].tolist()
+            selected_user = st.selectbox("Select User for Notification", user_options)
+        else:
+            st.error("Failed to fetch participants data.")
+        
 
     with col2:
         # Dropdown for questionnaire selection
