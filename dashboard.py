@@ -9,12 +9,14 @@ from private_config import *
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import messaging
+from api import fetch_participants
+from api import update_participant_to_db
+
 
 
 # Initialize the Firebase Admin SDK
-cred_path = '/Users/alongetz/Downloads/booggii-5895-firebase-adminsdk-rnglh-2974cf81b1.json'  
 if not firebase_admin._apps:
-    cred = credentials.Certificate(cred_path)
+    cred = credentials.Certificate(FIREBASE_CRED_PATH)
     firebase_admin.initialize_app(cred)
 
 
@@ -61,26 +63,10 @@ def get_profile_dataset(number_of_items: int = 20):
     return df
 
 
-"""Sends a push notification request to a specified backend URL."""
-def send_notification_to_backend(user_nickname, questionnaire_option):
-    backend_url = 'https://your-backend-service.com/notifications/send'  # URL of your notification service backend
-    payload = {
-        'user_nickname': user_nickname,
-        'questionnaire_option': questionnaire_option
-    }
-    try:
-        response = requests.post(backend_url, json=payload)  # Send the POST request
-        # Handle response
-        if response.status_code == 200:
-            return True, "Notification sent successfully!"
-        else:
-            return False, "Failed to send notification."
-    except Exception as e:
-        return False, str(e)
-
 """Fetches events data from a predefined URL."""
 def fetch_events_data():
-    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/events/"
+    url = f"{BASE_URL}/events/"
+
     try:
         response = requests.get(url)  # Attempt to GET the data
         # Handle response
@@ -93,7 +79,8 @@ def fetch_events_data():
 
 """Fetches questionnaire data from a predefined URL."""
 def fetch_questionnaire_data():
-    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/questionnaire/"
+    url = f"{BASE_URL}/questionnaire/"
+
     try:
         response = requests.get(url)  # Attempt to GET the data
         # Handle response
@@ -105,33 +92,33 @@ def fetch_questionnaire_data():
         return None
 
 def fetch_participants_data():
-    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/participants/"  
+    url = f"{BASE_URL}/participants/"
+  
     try:
-        response = requests.get(url)
-        if response.ok:
-            data = response.json()
-            active_participants = [p for p in data if p.get('is_active', False) == True]  # Filter only active participants
+        participants_data = fetch_participants()
 
-            # Normalize the column names here, for example:
-            for entry in active_participants:
-                # Normalize datetime columns to one format
-                entry['created_at'] = entry.pop('createdAt', entry.get('created_at', ''))
-                entry['updated_at'] = entry.pop('updatedAt', entry.get('updated_at', ''))
-                entry['empatica_status'] = entry.pop('empaticaStatus', entry.get('empatica_status', ''))
-                entry['num_of_events_current_date'] = entry.pop('numOfEventsCurrentDate', entry.get('num_of_events_current_date', ''))
-                # Normalize boolean columns to one format
-                entry['is_active'] = entry.pop('isActive', entry.get('is_active', ''))
-                # Remove the camelCase keys if they exist
-                entry.pop('createdAt', None)
-                entry.pop('updatedAt', None)
-                entry.pop('isActive', None)
-                entry.pop('numOfEventsCurrentDate', None)
-                entry.pop('empaticaStatusß', None)
-            return active_participants
-        else:
-            return None
+        response = requests.get(url)
+        active_participants = [p for p in participants_data if p.get('is_active', False) == True]  # Filter only active participants
+
+        # Normalize the column names here, for example:
+        for entry in active_participants:
+            # Normalize datetime columns to one format
+            entry['created_at'] = entry.pop('createdAt', entry.get('created_at', ''))
+            entry['updated_at'] = entry.pop('updatedAt', entry.get('updated_at', ''))
+            entry['empatica_status'] = entry.pop('empaticaStatus', entry.get('empatica_status', ''))
+            entry['num_of_events_current_date'] = entry.pop('numOfEventsCurrentDate', entry.get('num_of_events_current_date', ''))
+            # Normalize boolean columns to one format
+            entry['is_active'] = entry.pop('isActive', entry.get('is_active', ''))
+            # Remove the camelCase keys if they exist
+            entry.pop('createdAt', None)
+            entry.pop('updatedAt', None)
+            entry.pop('isActive', None)
+            entry.pop('numOfEventsCurrentDate', None)
+            entry.pop('empaticaStatusß', None)
+        return active_participants
     except Exception as e:
         return None
+    
     
 # Function to refresh and display participant data
 def refresh_and_display_participants(placeholder):
@@ -158,7 +145,7 @@ def transform_questionnaire_data(questionnaire_data):
     # Map 'num' to 'Question Number' and 'type' to 'Type'
     df.rename(columns={'num': 'מס שאלה', 'type': 'סוג', 'question': 'השאלה'}, inplace=True)
     
-    # Assuming 'days' are 1 (Sunday) to 7 (Saturday)
+    # 'days' are 1 (Sunday) to 7 (Saturday)
     days_of_week = {1: 'Sunday', 2: 'Monday', 3: 'Tuesday', 
                     4: 'Wednesday', 5: 'Thursday', 6: 'Friday', 7: 'Saturday'}
     
@@ -191,7 +178,9 @@ def transform_questionnaire_data(questionnaire_data):
 
 # Function to post data to the API endpoint
 def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
-    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/participants/"
+    url = f"{BASE_URL}/participants/"
+
+    
     payload = {
         "nickName": nickName,
         "phone": phone,
@@ -228,38 +217,36 @@ def add_participant_form(form_expander,placeholder):
                 st.error(f"Failed to add participant. Status code: {response.status_code}")
 
 
-# Function to update participant data in the API
-def update_participant_to_db(patientId, nickName, phone, empaticaId, firebaseId, empaticaStatus, isActive):
-    url = "https://r4jlflfk41.execute-api.eu-west-1.amazonaws.com/Dev/participants/"
-    payload = {
-        "patientId": patientId,
-        "nickName": nickName,
-        "phone": phone,
-        "empaticaId": empaticaId,
-        "firebaseId": firebaseId,
-        "empaticaStatus": empaticaStatus,
-        "isActive": isActive
-    }
-    headers = {
-        'Content-Type': 'application/json'
-    }
-    response = requests.patch(url, json=payload, headers=headers)
-    return response
+# # Function to update participant data in the API
+# def update_participant_to_db(patientId, updates):
+#     url = f"{BASE_URL}/participants/"
+#     headers = {'Content-Type': 'application/json'}
+#     response = requests.patch(url, json=updates, headers=headers)
+#     return response
 
-# Function to update participant data in the API
-def update_participant_form(container,placeholder):
+def update_participant_form(container, placeholder):
     with st.form("update_participant_form"):
-        patientId = st.text_input("Patient ID")
-        nickName = st.text_input("Nickname")
-        phone = st.text_input("Phone")
-        empaticaId = st.text_input("Empatica ID")
-        firebaseId = st.text_input("Firebase ID")
-        empaticaStatus = st.selectbox("Empatica Status", [True, False])
-        isActive = st.selectbox("Is Active", [True, False])
+        patientId = st.text_input("Patient ID", key="patientId")
+        nickName = st.text_input("Nickname", key="nickName")
+        phone = st.text_input("Phone", key="phone")
+        empaticaId = st.text_input("Empatica ID", key="empaticaId")
+        firebaseId = st.text_input("Firebase ID", key="firebaseId")
+#        empaticaStatus = st.selectbox("Empatica Status", [True, False], key="empaticaStatus")
+        isActive = st.selectbox("Is Active", [True, False], key="isActive")
         submit_button = st.form_submit_button("Submit Update")
 
         if submit_button:
-            response = update_participant_to_db(patientId, nickName, phone, empaticaId, firebaseId, empaticaStatus, isActive)
+            updates = {
+                "patientId": patientId,  # patientId must be sent for identification
+                **({"nickName": nickName} if nickName else {}),
+                **({"phone": phone} if phone else {}),
+                **({"empaticaId": empaticaId} if empaticaId else {}),
+                **({"firebaseId": firebaseId} if firebaseId else {}),
+ #               **({"empaticaStatus": empaticaStatus} if empaticaStatus is not None else {}),
+                **({"isActive": isActive} if isActive is not None else {})
+            }
+
+            response = update_participant_to_db(patientId, updates)
             if response.status_code == 200:
                 st.success("Participant updated successfully!")
                 st.session_state['show_update_participant_form'] = False
@@ -268,6 +255,73 @@ def update_participant_form(container,placeholder):
             else:
                 st.error(f"Failed to update participant. Status code: {response.status_code}")
 
+def get_questions(patient_id):
+    # Construct the URL with the patientId as a query parameter
+    url = f"{BASE_URL}/questions?patientId={patient_id}"
+    
+    # Make the GET request to the API
+    response = requests.get(url)
+    
+    # Check if the request was successful
+    if response.status_code == 200:
+        # Parse the response JSON
+        questions_data = response.json()
+        return questions_data
+    else:
+        st.error("Failed to retrieve questions.")
+        return None
+
+import pandas as pd
+
+import pandas as pd
+import streamlit as st
+
+def show_questions(patient_id, questionnaire_df):
+    # Retrieve questions for the given patientId
+    questions_data = get_questions(patient_id)
+
+    if questions_data and questionnaire_df is not None:
+        # Sort questions by timestamp
+        sorted_questions = sorted(questions_data, key=lambda x: x['timestamp'])
+
+        # Prepare lists to store our data
+        timestamps = []
+        question_texts = []
+        answers = []
+
+        # Populate the lists with sorted data
+        for question in sorted_questions:
+            question_id = question.get('questionId')
+            question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_id, 'השאלה'].iloc[0]
+            answer = question.get('answer', 'No answer provided')
+            timestamp = question.get('timestamp', 'No timestamp provided')
+
+            timestamps.append(timestamp)
+            question_texts.append(question_text)
+            answers.append(answer)
+        
+        # Create a DataFrame with the collected data
+        questions_df = pd.DataFrame({
+            'Timestamp': timestamps,
+            'Question': question_texts,
+            'Answer': answers
+        })
+
+        # Display the DataFrame as a table
+        st.table(questions_df)
+
+        # Convert DataFrame to CSV for download
+        csv = questions_df.to_csv(index=False).encode('utf-8-sig')
+        file_name = f"questions_{patient_id}.csv"  # Dynamically set the filename with patientId
+
+        st.download_button(
+            label="Download Questions as CSV",
+            data=csv,
+            file_name=file_name,
+            mime='text/csv',
+        )
+    else:
+        st.error("Failed to retrieve questions or questionnaire data.")
 
 
 def show_dashboard():
@@ -357,16 +411,18 @@ def show_dashboard():
         }
         # Button to send notification
         if st.button("Send App Notification"):
-            # Presuming you have defined `fcm_token` and `send_firebase_notification` somewhere above
-            if fcm_token:
-                try:
-                    title = selected_user  # Set the notification title
-                    body = selected_questionnaire  # Set the notification body
-                    response = send_firebase_notification(fcm_token, title, body, data=custom_data)
-                    st.success(f'Firebase Notification sent! Response: {response}')
-                except Exception as e:
-                    st.error(f'Failed to send Firebase notification. Error: {str(e)}')
+            try:
+                # Fetch the firebaseId for the selected user
+                selected_participant = participant_df[participant_df['nickName'] == selected_user].iloc[0]
+                fcm_token = selected_participant['firebaseId']  # Assuming the column name in the df is 'firebaseId'
 
+                title = selected_user  # Set the notification title
+                body = selected_questionnaire  # Set the notification body
+                response = send_firebase_notification(fcm_token, title, body, data=custom_data)
+                st.success(f'Firebase Notification sent! Response: {response}')
+            except Exception as e:
+                st.error(f'Failed to send Firebase notification. Error: {str(e)}')
+  
     # Horizontal line as a divider
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -386,6 +442,16 @@ def show_dashboard():
         
     else:
         st.error("Failed to fetch questionnaire data or no data available.")
+        
+    # Add text input and button to get questions
+    st.subheader("Retrieve Questions")
+    patient_id_input = st.text_input("Enter Patient ID to retrieve questions:")
+    
+    if st.button('Get Questions'):
+        if patient_id_input and questionnaire_df is not None:
+            show_questions(patient_id_input, questionnaire_df)
+        else:
+            st.error("Please enter a valid Patient ID and ensure questionnaire data is loaded.")
 
 if __name__ == "__main__":
     show_dashboard()
