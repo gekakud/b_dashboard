@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import random
-from faker import Faker
 import requests
 from twilio.rest import Client
 from private_config import *
@@ -33,35 +32,6 @@ def send_firebase_notification(token, title, body, data=None):
     # Send the message
     response = messaging.send(message)
     return response
-
-
-# Cache this function to prevent Streamlit from running it every time the app rerenders.
-@st.cache_data
-def get_profile_dataset(number_of_items: int = 20):
-    """Generates a dataset of fake profiles using the Faker library."""
-    Faker.seed(0)  # Ensures consistent results on app reloads
-    fake = Faker()  # Create a Faker generator
-    data = []
-    
-    # Generate fake profile data
-    for _ in range(number_of_items):
-        profile = fake.profile(fields=['name', 'username', 'sex', 'ssn'])
-        data.append({
-            "Name": profile['name'],
-            "Nickname": profile['username'],
-            "Gender": profile['sex'],
-            "ID": profile['ssn'],
-            "Empatica Connected": random.choice([True, False]),
-            "Events 24h": np.random.randint(0, 15),
-            "Battery Status": round(random.uniform(0, 100), 2),
-            "Daily Activity": np.random.randint(0, 2, 24),
-        })
-
-    # Create a DataFrame from the generated data
-    df = pd.DataFrame(data)
-    df["Gender"] = df["Gender"].astype("category")  # Set 'Gender' as a category type for efficient storage
-    return df
-
 
 """Fetches events data from a predefined URL."""
 def fetch_events_data():
@@ -271,18 +241,13 @@ def get_questions(patient_id):
         st.error("Failed to retrieve questions.")
         return None
 
-import pandas as pd
-
-import pandas as pd
-import streamlit as st
-
 def show_questions(patient_id, questionnaire_df):
     # Retrieve questions for the given patientId
     questions_data = get_questions(patient_id)
 
     if questions_data and questionnaire_df is not None:
-        # Sort questions by timestamp
-        sorted_questions = sorted(questions_data, key=lambda x: x['timestamp'])
+        # Sort questions by timestamp in descending order
+        sorted_questions = sorted(questions_data, key=lambda x: x['timestamp'], reverse=True)
 
         # Prepare lists to store our data
         timestamps = []
@@ -292,14 +257,17 @@ def show_questions(patient_id, questionnaire_df):
         # Populate the lists with sorted data
         for question in sorted_questions:
             question_id = question.get('questionId')
-            question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_id, 'השאלה'].iloc[0]
+            question_num = question.get('questionNum')
+            question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_num, 'השאלה'].iloc[0]
             answer = question.get('answer', 'No answer provided')
             timestamp = question.get('timestamp', 'No timestamp provided')
 
-            timestamps.append(timestamp)
+            # Format timestamp to remove milliseconds
+            formatted_timestamp = pd.to_datetime(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+            timestamps.append(formatted_timestamp)
             question_texts.append(question_text)
             answers.append(answer)
-        
+
         # Create a DataFrame with the collected data
         questions_df = pd.DataFrame({
             'Timestamp': timestamps,
@@ -307,8 +275,11 @@ def show_questions(patient_id, questionnaire_df):
             'Answer': answers
         })
 
-        # Display the DataFrame as a table
-        st.table(questions_df)
+        # Convert DataFrame to HTML and use style to align text to the right
+        questions_html = questions_df.to_html(index=False, escape=False, justify='right')
+
+        # Use Markdown to display the HTML DataFrame, adjusting CSS for right alignment
+        st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
 
         # Convert DataFrame to CSV for download
         csv = questions_df.to_csv(index=False).encode('utf-8-sig')
@@ -322,7 +293,6 @@ def show_questions(patient_id, questionnaire_df):
         )
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
-
 
 def show_dashboard():
     """Main function to display the Streamlit dashboard."""
@@ -405,10 +375,11 @@ def show_dashboard():
         """, unsafe_allow_html=True)
         
         custom_data = {
-            "key1": "value1",
-            "key2": "value2",
+            "Nick" : "Mario",
+            "Room" : "PortugalVSDenmark"
             # ... additional key-value pairs
         }
+
         # Button to send notification
         if st.button("Send App Notification"):
             try:
