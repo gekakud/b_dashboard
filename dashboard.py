@@ -187,13 +187,6 @@ def add_participant_form(form_expander,placeholder):
                 st.error(f"Failed to add participant. Status code: {response.status_code}")
 
 
-# # Function to update participant data in the API
-# def update_participant_to_db(patientId, updates):
-#     url = f"{BASE_URL}/participants/"
-#     headers = {'Content-Type': 'application/json'}
-#     response = requests.patch(url, json=updates, headers=headers)
-#     return response
-
 def update_participant_form(container, placeholder):
     with st.form("update_participant_form"):
         patientId = st.text_input("Patient ID", key="patientId")
@@ -416,13 +409,29 @@ def show_dashboard():
         
     # Add text input and button to get questions
     st.subheader("Retrieve Questions")
-    patient_id_input = st.text_input("Enter Patient ID to retrieve questions:")
+#    patient_id_input = st.text_input("Enter Patient ID to retrieve questions:")
     
-    if st.button('Get Questions'):
-        if patient_id_input and questionnaire_df is not None:
-            show_questions(patient_id_input, questionnaire_df)
-        else:
-            st.error("Please enter a valid Patient ID and ensure questionnaire data is loaded.")
+    user_options2 = participant_df['nickName'].tolist()
+    selected_user2 = st.selectbox("Select User for retrieving questions", user_options2)
+    
+    if st.button("Get User's Questions"):
+        try:
+            # Fetch the firebaseId for the selected user
+            selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
+            patient_id = selected_partici['patientId'] 
+            if patient_id and questionnaire_df is not None:
+                show_questions(patient_id, questionnaire_df)
+                st.success(f'Questions from user arrived!')
+        
+        except Exception as e:
+            st.error(f'Failed to get questions from user. Error: {str(e)}')
+            
+    
+    #if st.button('Get Questions'):
+    #    if patient_id_input and questionnaire_df is not None:
+    #        show_questions(patient_id_input, questionnaire_df)
+    #    else:
+    #        st.error("Please enter a valid Patient ID and ensure questionnaire data is loaded.")
 
 if __name__ == "__main__":
     show_dashboard()
