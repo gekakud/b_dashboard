@@ -1,3 +1,5 @@
 streamlit==1.31.1
 streamlit-authenticator==0.3.1
 faker
+firebase_admin
+twilio
