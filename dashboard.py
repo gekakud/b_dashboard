@@ -83,7 +83,6 @@ def show_participants_data():
             'empaticaId'
         ]
         participant_df = participant_df[column_order]
-   #     st.subheader("Participants Data")
         st.dataframe(participant_df, use_container_width=True, hide_index=True)
     else:
         st.error("Failed to fetch participants data.")
@@ -332,6 +331,25 @@ def show_questions(patient_id, questionnaire_df):
         st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
+        
+def display_events_data():
+    event_data = fetch_events_data()
+    participant_data = fetch_participants_data()
+    participant_df = pd.DataFrame(participant_data)
+    
+    if event_data and participant_data:
+        events_df = pd.DataFrame(event_data)
+        events_df['timestamp'] = pd.to_datetime(events_df['timestamp'])
+        merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
+        if 'deviceId' in merged_df.columns:
+            merged_df.drop(columns=['deviceId'], inplace=True)
+        reordered_columns = ['timestamp', 'nickName', 'severity', 'eventType', 'activity', 'patientId', 'location']
+        merged_df = merged_df[reordered_columns]
+        events_df_sorted = merged_df.sort_values(by='timestamp', ascending=False)
+        st.dataframe(events_df_sorted, use_container_width=True, hide_index=True)
+    else:
+        st.error("Failed to fetch data or no data available.")
+
 
 def show_dashboard():
     st.subheader("Participants Status")
@@ -401,27 +419,8 @@ def show_dashboard():
     
     if st.button('Refresh Data', key='refresh_button2'):
         st.cache_data.clear()
-    
-    st.subheader("Events Data")
-    events_placeholder = st.empty()
 
-    def display_events_data():
-        if event_data and participant_data:
-            events_df = pd.DataFrame(event_data)
-            events_df['timestamp'] = pd.to_datetime(events_df['timestamp'])
-            merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
-            if 'deviceId' in merged_df.columns:
-                merged_df.drop(columns=['deviceId'], inplace=True)
-            reordered_columns = ['timestamp', 'nickName', 'severity', 'eventType', 'activity', 'patientId', 'location']
-            merged_df = merged_df[reordered_columns]
-            events_df_sorted = merged_df.sort_values(by='timestamp', ascending=False)
-            events_placeholder.dataframe(events_df_sorted, use_container_width=True, hide_index=True)
-        else:
-            events_placeholder.error("Failed to fetch data or no data available.")
-
-    if st.button('Refresh Data', key='refresh_button3'):
-        st.cache_data.clear()
-
+    st.subheader("All Events Data")
     display_events_data()
 
     if questionnaire_data:
