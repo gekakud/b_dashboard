@@ -195,16 +195,10 @@ def calculate_average_daily_events(event_data, participant_df, days=None):
 
 def show_participants_status():
     participants_status_df = fetch_participants_status()
+
     if participants_status_df is not None:
-  #      st.subheader("Participants Status")
         st.dataframe(participants_status_df, use_container_width=True, hide_index=True)
-        csv = participants_status_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="Download Participants Status as CSV",
-            data=csv,
-            file_name="participants_status.csv",
-            mime='text/csv',
-        )
+
     else:
         st.error("Failed to fetch participants status data.")
 
@@ -323,9 +317,6 @@ def show_questions(patient_id, questionnaire_df):
         })
         questions_html = questions_df.to_html(index=False, escape=False, justify='right')
         st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
-        csv = questions_df.to_csv(index=False).encode('utf-8-sig')
-        file_name = f"questions_{patient_id}.csv"
-        st.download_button(label="Download Questions as CSV", data=csv, file_name=file_name, mime='text/csv')
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
 
