@@ -6,7 +6,7 @@ from private_config import *
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import messaging
-from api import fetch_participants, fetch_questionnaire_data, fetch_events_data
+from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db
 
 # Initialize the Firebase Admin SDK
 if not firebase_admin._apps:
@@ -99,8 +99,8 @@ def fetch_participants_status():
         participant_df['empatica_last_update'] = pd.to_datetime(participant_df['empatica_last_update'], errors='coerce')
 
         # Initialize the columns with default float values
-        participant_df['percentage_nan_last_36_hours'] = 0.0
-        participant_df['percentage_nan_total'] = 0.0
+        participant_df['NaN answers last 36 hours (%)'] = 0.0
+        participant_df['NaN answers total (%)'] = 0.0
 
         # Iterate over each participant to fetch and process their questionnaire data
         for idx, participant in participant_df.iterrows():
@@ -112,23 +112,26 @@ def fetch_participants_status():
                 percentage_last_36_hours = calculate_percentage_of_nan_questions(questions_data, time_limit_hours=36)
                 percentage_total = calculate_percentage_of_nan_questions(questions_data, time_limit_hours=None)
 
-                participant_df.at[idx, 'percentage_nan_last_36_hours'] = percentage_last_36_hours
-                participant_df.at[idx, 'percentage_nan_total'] = percentage_total
+                participant_df.at[idx, 'NaN answers last 36 hours (%)'] = percentage_last_36_hours
+                participant_df.at[idx, 'NaN answers total (%)'] = percentage_total
 
         # Calculate the time since the last update in hours
-        participant_df['time_since_last_update_hours'] = participant_df['empatica_last_update'].apply(calculate_time_since_last_connection)
+        participant_df['Time Since Empatica Update'] = participant_df['empatica_last_update'].apply(calculate_time_since_last_connection)
+
+        # Format the time since the last update using the format_time_since_update function
+        participant_df['Time Since Empatica Update'] = participant_df['Time Since Empatica Update'].apply(format_time_since_update)
 
         # Calculate the remaining fields
-        participant_df['average_daily_events_last_7_days'] = calculate_average_daily_events(event_data, participant_df, days=7)
-        participant_df['average_daily_events_total'] = calculate_average_daily_events(event_data, participant_df, days=None)
+        participant_df['Daily events last 7 days'] = calculate_average_daily_events(event_data, participant_df, days=7)
+        participant_df['Daily events total'] = calculate_average_daily_events(event_data, participant_df, days=None)
 
         column_order = [
             'nickName',
-            'time_since_last_update_hours',
-            'percentage_nan_last_36_hours',
-            'percentage_nan_total',
-            'average_daily_events_last_7_days',
-            'average_daily_events_total'
+            'Time Since Empatica Update',
+            'NaN answers last 36 hours (%)',
+            'NaN answers total (%)',
+            'Daily events last 7 days',
+            'Daily events total'
         ]
 
         participant_df = participant_df[column_order]
@@ -148,6 +151,16 @@ def calculate_time_since_last_connection(empatica_last_update):
 
     return time_diff.total_seconds() / 3600  # Convert time difference to hours
 
+def format_time_since_update(hours):
+    if pd.isna(hours):
+        return "N/A"
+    
+    if hours < 24:
+        return f"{hours:.1f} Hrs"
+    else:
+        days = int(hours // 24)
+        remaining_hours = hours % 24
+        return f"{days} days, {remaining_hours:.1f} Hrs"
 
 def calculate_percentage_of_nan_questions(questionnaire_data, time_limit_hours=None):
     df = pd.DataFrame(questionnaire_data)
@@ -321,31 +334,79 @@ def show_questions(patient_id, questionnaire_df):
         st.error("Failed to retrieve questions or questionnaire data.")
 
 def show_dashboard():
-    st.subheader("Participants Data")
-    show_participants_data()
-
     st.subheader("Participants Status")
     participants_placeholder = st.empty()
     show_participants_status()
-
+    
+    st.subheader("Participants Data")
+    show_participants_data()
+    
     with st.expander("Add New Participant"):
         add_participant_form(st, participants_placeholder)
-
+    
     with st.expander("Update Participant"):
         update_participant_form(st, participants_placeholder)
-
-    st.markdown("<hr>", unsafe_allow_html=True)
-
-    st.subheader("Events Data")
-    events_placeholder = st.empty()
-
+    
+    if st.button('Refresh Data', key='refresh_button1'):
+        st.cache_data.clear()
+    
     # Fetch event and participant data once and reuse it
     event_data = fetch_events_data()
     participant_data = fetch_participants_data()
+    participant_df = pd.DataFrame(participant_data)
+    questionnaire_data = fetch_questionnaire_data()
+    if questionnaire_data:
+        questionnaire_df, timetable_df = transform_questionnaire_data(questionnaire_data)
+
+    st.subheader("Retrieve Participant's Data")
+    user_options2 = participant_df['nickName'].tolist()
+    selected_user2 = st.selectbox("Select User for retrieving questions", user_options2)
+    
+    # Add the "User's Status" button
+    if st.button("Get Participant's Data"):
+        try:
+            participants_status_df = fetch_participants_status()
+            user_status = participants_status_df[participants_status_df['nickName'] == selected_user2]
+            if not user_status.empty:
+                st.dataframe(user_status, use_container_width=True, hide_index=True)
+            else:
+                st.warning(f"No status found for user {selected_user2}.")
+        except Exception as e:
+            st.error(f'Failed to retrieve status for user. Error: {str(e)}')
+            
+        try:
+            selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
+            patient_id = selected_partici['patientId']
+            user_events = pd.DataFrame(event_data)
+            user_events = user_events[user_events['patientId'] == patient_id]
+            if not user_events.empty:
+                user_events_sorted = user_events.sort_values(by='timestamp', ascending=False)
+                st.dataframe(user_events_sorted, use_container_width=True, hide_index=True)
+            else:
+                st.warning(f"No events found for user {selected_user2}.")
+        
+        except Exception as e:
+            st.error(f'Failed to retrieve events for user. Error: {str(e)}')
+        
+        try:
+            if patient_id and questionnaire_df is not None:
+                show_questions(patient_id, questionnaire_df)
+                st.success(f'Questions from user arrived!')
+        
+        except Exception as e:
+            st.error(f'Failed to get questions from user. Error: {str(e)}')
+
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    
+    if st.button('Refresh Data', key='refresh_button2'):
+        st.cache_data.clear()
+    
+    st.subheader("Events Data")
+    events_placeholder = st.empty()
 
     def display_events_data():
         if event_data and participant_data:
-            participant_df = pd.DataFrame(participant_data)
             events_df = pd.DataFrame(event_data)
             events_df['timestamp'] = pd.to_datetime(events_df['timestamp'])
             merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
@@ -358,10 +419,18 @@ def show_dashboard():
         else:
             events_placeholder.error("Failed to fetch data or no data available.")
 
-    if st.button('Refresh Events'):
+    if st.button('Refresh Data', key='refresh_button3'):
         st.cache_data.clear()
 
     display_events_data()
+
+    if questionnaire_data:
+        st.subheader("Questionnaire Details")
+        st.dataframe(questionnaire_df, hide_index=True)
+        st.subheader("Questionnaire Timetable")
+        st.dataframe(timetable_df)
+    else:
+        st.error("Failed to fetch questionnaire data or no data available.")
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -375,10 +444,11 @@ def show_dashboard():
             selected_user = st.selectbox("Select User for Notification", user_options)
         else:
             st.error("Failed to fetch participants data.")
-
+        
     with col2:
         questionnaire_options = ["נא למלא שאלון אירוע", "נא לוודא חיבור שעון", "נא לוודא שעון על היד"]
         selected_questionnaire = st.selectbox("Select Questionnaire Option", questionnaire_options)
+        custom_message = st.text_input("Or enter a custom message")
 
     with col3:
         st.markdown("""
@@ -388,7 +458,7 @@ def show_dashboard():
         }
         </style>
         """, unsafe_allow_html=True)
-
+        
         custom_data = {
             "Nick": "Mario",
             "Room": "PortugalVSDenmark"
@@ -399,68 +469,13 @@ def show_dashboard():
                 selected_participant = participant_df[participant_df['nickName'] == selected_user].iloc[0]
                 fcm_token = selected_participant['firebaseId']
                 title = selected_user
-                body = selected_questionnaire
+                body = custom_message if custom_message else selected_questionnaire
                 response = send_firebase_notification(fcm_token, title, body, data=custom_data)
                 st.success(f'Firebase Notification sent! Response: {response}')
             except Exception as e:
                 st.error(f'Failed to send Firebase notification. Error: {str(e)}')
-
+  
     st.markdown("<hr>", unsafe_allow_html=True)
-
-    questionnaire_data = fetch_questionnaire_data()
-    if questionnaire_data:
-        questionnaire_df, timetable_df = transform_questionnaire_data(questionnaire_data)
-        st.subheader("Questionnaire Details")
-        st.dataframe(questionnaire_df, hide_index=True)
-        st.subheader("Questionnaire Timetable")
-        st.dataframe(timetable_df)
-    else:
-        st.error("Failed to fetch questionnaire data or no data available.")
-
-    st.subheader("Retrieve participant's data")
-    user_options2 = participant_df['nickName'].tolist()
-    selected_user2 = st.selectbox("Select User for retrieving questions", user_options2)
-
-    if st.button("Get User's Questions"):
-        try:
-            selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
-            patient_id = selected_partici['patientId']
-            if patient_id and questionnaire_df is not None:
-                show_questions(patient_id, questionnaire_df)
-                st.success(f'Questions from user arrived!')
-
-        except Exception as e:
-            st.error(f'Failed to get questions from user. Error: {str(e)}')
-
-    # Add the "User's Events" button
-    if st.button("Get User's Events"):
-        try:
-            selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
-            patient_id = selected_partici['patientId']
-            user_events = pd.DataFrame(event_data)
-            user_events = user_events[user_events['patientId'] == patient_id]
-            if not user_events.empty:
-                user_events_sorted = user_events.sort_values(by='timestamp', ascending=False)
-                st.dataframe(user_events_sorted, use_container_width=True, hide_index=True)
-            else:
-                st.warning(f"No events found for user {selected_user2}.")
-
-        except Exception as e:
-            st.error(f'Failed to retrieve events for user. Error: {str(e)}')
-
-    if st.button("Get User's Status"):
-        try:
-            participants_status_df = fetch_participants_status()
-            # Find the status of the selected user based on nickName
-            user_status = participants_status_df[participants_status_df['nickName'] == selected_user2]
-            if not user_status.empty:
-                st.dataframe(user_status, use_container_width=True, hide_index=True)
-            else:
-                st.warning(f"No status found for user {selected_user2}.")
-        except Exception as e:
-            st.error(f'Failed to retrieve status for user. Error: {str(e)}')
-
-
 
 if __name__ == "__main__":
     show_dashboard()
