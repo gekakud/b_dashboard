@@ -16,6 +16,16 @@ def update_participant_to_db(patientId, updates):
     headers = {'Content-Type': 'application/json'}
     response = requests.patch(url, json=updates, headers=headers)
     return response
+
+def get_questions(patient_id):
+    url = f"{BASE_URL}/questions?patientId={patient_id}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    else:
+  #      st.error("Failed to retrieve questions.")
+        return None
+    
 def fetch_events_data():
     url = f"{BASE_URL}/events/"
     try:
@@ -37,4 +47,19 @@ def fetch_questionnaire_data():
             return None
     except Exception:
         return None
+    
+def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
+    url = f"{BASE_URL}/participants/"
+    payload = {
+        "nickName": nickName,
+        "phone": phone,
+        "empaticaId": empaticaId,
+        "firebaseId": firebaseId
+    }
+    headers = {
+        'Content-Type': 'application/json'
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    return response
+
 # Add other API functions here similarly

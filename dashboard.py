@@ -6,7 +6,8 @@ from private_config import *
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import messaging
-from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db
+from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db, get_questions, add_participant_to_db
+
 
 # Initialize the Firebase Admin SDK
 if not firebase_admin._apps:
@@ -70,8 +71,7 @@ def refresh_and_display_participants(placeholder):
     else:
         st.error("Failed to fetch participants or events data.")
 
-def show_participants_data():
-    participant_data = fetch_participants_data()
+def show_participants_data(participant_data):
     if participant_data:
         participant_df = pd.DataFrame(participant_data)
         column_order = [
@@ -87,10 +87,7 @@ def show_participants_data():
     else:
         st.error("Failed to fetch participants data.")
 
-def fetch_participants_status():
-    participant_data = fetch_participants_data()
-    event_data = fetch_events_data()
-
+def fetch_participants_status(participant_data, event_data):
     if participant_data and event_data:
         participant_df = pd.DataFrame(participant_data)
 
@@ -98,8 +95,8 @@ def fetch_participants_status():
         participant_df['empatica_last_update'] = pd.to_datetime(participant_df['empatica_last_update'], errors='coerce')
 
         # Initialize the columns with default float values
-        participant_df['NaN answers last 36 hours (%)'] = 0.0
-        participant_df['NaN answers total (%)'] = 0.0
+        participant_df['NaN ans last 36 hours (%)'] = 0.0
+        participant_df['NaN ans total (%)'] = 0.0
 
         # Iterate over each participant to fetch and process their questionnaire data
         for idx, participant in participant_df.iterrows():
@@ -111,8 +108,8 @@ def fetch_participants_status():
                 percentage_last_36_hours = calculate_percentage_of_nan_questions(questions_data, time_limit_hours=36)
                 percentage_total = calculate_percentage_of_nan_questions(questions_data, time_limit_hours=None)
 
-                participant_df.at[idx, 'NaN answers last 36 hours (%)'] = percentage_last_36_hours
-                participant_df.at[idx, 'NaN answers total (%)'] = percentage_total
+                participant_df.at[idx, 'NaN ans last 36 hours (%)'] = percentage_last_36_hours
+                participant_df.at[idx, 'NaN ans total (%)'] = percentage_total
 
         # Calculate the time since the last update in hours
         participant_df['Time Since Empatica Update'] = participant_df['empatica_last_update'].apply(calculate_time_since_last_connection)
@@ -127,8 +124,8 @@ def fetch_participants_status():
         column_order = [
             'nickName',
             'Time Since Empatica Update',
-            'NaN answers last 36 hours (%)',
-            'NaN answers total (%)',
+            'NaN ans last 36 hours (%)',
+            'NaN ans total (%)',
             'Daily events last 7 days',
             'Daily events total'
         ]
@@ -205,15 +202,6 @@ def calculate_average_daily_events(event_data, participant_df, days=None):
 
     return participant_df['average_daily_events']
 
-def show_participants_status():
-    participants_status_df = fetch_participants_status()
-
-    if participants_status_df is not None:
-        st.dataframe(participants_status_df, use_container_width=True, hide_index=True)
-
-    else:
-        st.error("Failed to fetch participants status data.")
-
 def transform_questionnaire_data(questionnaire_data):
     df = pd.DataFrame(questionnaire_data)
     df.rename(columns={'num': 'מס שאלה', 'type': 'סוג', 'question': 'השאלה'}, inplace=True)
@@ -236,20 +224,6 @@ def transform_questionnaire_data(questionnaire_data):
                         timetable.at[hour_str, day_name] += f', {question_number}'
     df = df[['סוג', 'השאלה', 'מס שאלה']]
     return df, timetable
-
-def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
-    url = f"{BASE_URL}/participants/"
-    payload = {
-        "nickName": nickName,
-        "phone": phone,
-        "empaticaId": empaticaId,
-        "firebaseId": firebaseId
-    }
-    headers = {
-        'Content-Type': 'application/json'
-    }
-    response = requests.post(url, json=payload, headers=headers)
-    return response
 
 def add_participant_form(form_expander, placeholder):
     with st.form("new_participant_form"):
@@ -296,15 +270,6 @@ def update_participant_form(container, placeholder):
             else:
                 st.error(f"Failed to update participant. Status code: {response.status_code}")
 
-def get_questions(patient_id):
-    url = f"{BASE_URL}/questions?patientId={patient_id}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        st.error("Failed to retrieve questions.")
-        return None
-
 def show_questions(patient_id, questionnaire_df):
     questions_data = get_questions(patient_id)
     if questions_data and questionnaire_df is not None:
@@ -332,9 +297,7 @@ def show_questions(patient_id, questionnaire_df):
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
         
-def display_events_data():
-    event_data = fetch_events_data()
-    participant_data = fetch_participants_data()
+def display_events_data(event_data, participant_data):
     participant_df = pd.DataFrame(participant_data)
     
     if event_data and participant_data:
@@ -352,12 +315,21 @@ def display_events_data():
 
 
 def show_dashboard():
-    st.subheader("Participants Status")
     participants_placeholder = st.empty()
-    show_participants_status()
+    event_data = fetch_events_data()
+    participant_data = fetch_participants_data()
+    participant_df = pd.DataFrame(participant_data)
+    questionnaire_data = fetch_questionnaire_data()
+    participants_status_df = fetch_participants_status(participant_data, event_data)
+
+    st.subheader("Participants Status")
+    if participants_status_df is not None:
+        st.dataframe(participants_status_df, use_container_width=True, hide_index=True)
+    else:
+        st.error("Failed to fetch participants status data.")
     
     st.subheader("Participants Data")
-    show_participants_data()
+    show_participants_data(participant_data)
     
     with st.expander("Add New Participant"):
         add_participant_form(st, participants_placeholder)
@@ -369,10 +341,6 @@ def show_dashboard():
         st.cache_data.clear()
     
     # Fetch event and participant data once and reuse it
-    event_data = fetch_events_data()
-    participant_data = fetch_participants_data()
-    participant_df = pd.DataFrame(participant_data)
-    questionnaire_data = fetch_questionnaire_data()
     if questionnaire_data:
         questionnaire_df, timetable_df = transform_questionnaire_data(questionnaire_data)
 
@@ -383,7 +351,6 @@ def show_dashboard():
     # Add the "User's Status" button
     if st.button("Get Participant's Data"):
         try:
-            participants_status_df = fetch_participants_status()
             user_status = participants_status_df[participants_status_df['nickName'] == selected_user2]
             if not user_status.empty:
                 st.dataframe(user_status, use_container_width=True, hide_index=True)
@@ -421,7 +388,7 @@ def show_dashboard():
         st.cache_data.clear()
 
     st.subheader("All Events Data")
-    display_events_data()
+    display_events_data(event_data, participant_data)
 
     if questionnaire_data:
         st.subheader("Questionnaire Details")
