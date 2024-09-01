@@ -8,6 +8,8 @@ from firebase_admin import credentials
 from firebase_admin import messaging
 from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db, get_questions, add_participant_to_db
 
+status_placeholder = None
+participants_placeholder = None
 
 # Initialize the Firebase Admin SDK
 if not firebase_admin._apps:
@@ -72,6 +74,8 @@ def refresh_and_display_participants(placeholder):
         st.error("Failed to fetch participants or events data.")
 
 def show_participants_data(participant_data):
+    global participants_placeholder
+    
     if participant_data:
         participant_df = pd.DataFrame(participant_data)
         column_order = [
@@ -83,9 +87,17 @@ def show_participants_data(participant_data):
             'empaticaId'
         ]
         participant_df = participant_df[column_order]
-        st.dataframe(participant_df, use_container_width=True, hide_index=True)
+        participants_placeholder.dataframe(participant_df, use_container_width=True, hide_index=True)
     else:
         st.error("Failed to fetch participants data.")
+
+def show_participants_status(participants_status_df):
+    global status_placeholder
+
+    if participants_status_df is not None:
+        status_placeholder.dataframe(participants_status_df, use_container_width=True, hide_index=True)
+    else:
+        st.error("Failed to fetch participants status data.")
 
 def fetch_participants_status(participant_data, event_data):
     if participant_data and event_data:
@@ -165,10 +177,10 @@ def calculate_percentage_of_nan_questions(questionnaire_data, time_limit_hours=N
         df = df[pd.to_datetime(df['timestamp']) >= cutoff_time]
     return df['answer'].isna().mean() * 100
 
+"""
+Calculate the average number of events per day for each participant.
+"""
 def calculate_average_daily_events(event_data, participant_df, days=None):
-    """
-    Calculate the average number of events per day for each participant.
-    """
     # Debugging: Check the type of event_data
     print(f"Type of event_data: {type(event_data)}")
 
@@ -225,7 +237,10 @@ def transform_questionnaire_data(questionnaire_data):
     df = df[['סוג', 'השאלה', 'מס שאלה']]
     return df, timetable
 
-def add_participant_form(form_expander, placeholder):
+"""
+The place where the trial manager can add a participant
+"""
+def add_participant_form(form_expander):
     with st.form("new_participant_form"):
         nickName = st.text_input("Nickname")
         phone = st.text_input("Phone")
@@ -238,11 +253,19 @@ def add_participant_form(form_expander, placeholder):
             if response.status_code == 201:
                 st.success("Participant added successfully!")
                 form_expander.empty()
-                refresh_and_display_participants(placeholder)
+                #refresh_and_display_participants(placeholder)
+                participant_data = fetch_participants_data()
+                show_participants_data(participant_data)
+                event_data = fetch_events_data()
+                participants_status_df = fetch_participants_status(participant_data, event_data)
+                show_participants_status(participants_status_df)
             else:
                 st.error(f"Failed to add participant. Status code: {response.status_code}")
 
-def update_participant_form(container, placeholder):
+"""
+The place where the trial manager can update a specific user's data
+"""
+def update_participant_form(container):
     with st.form("update_participant_form"):
         patientId = st.text_input("Patient ID", key="patientId")
         nickName = st.text_input("Nickname", key="nickName")
@@ -266,7 +289,12 @@ def update_participant_form(container, placeholder):
                 st.success("Participant updated successfully!")
                 st.session_state['show_update_participant_form'] = False
                 container.empty()
-                refresh_and_display_participants(placeholder)
+               # refresh_and_display_participants(placeholder)
+                participant_data = fetch_participants_data()
+                show_participants_data(participant_data)
+                event_data = fetch_events_data()
+                participants_status_df = fetch_participants_status(participant_data, event_data)
+                show_participants_status(participants_status_df)
             else:
                 st.error(f"Failed to update participant. Status code: {response.status_code}")
 
@@ -296,7 +324,10 @@ def show_questions(patient_id, questionnaire_df):
         st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
-        
+
+"""
+Displays the table of events of all participants
+"""        
 def display_events_data(event_data, participant_data):
     participant_df = pd.DataFrame(participant_data)
     
@@ -313,9 +344,14 @@ def display_events_data(event_data, participant_data):
     else:
         st.error("Failed to fetch data or no data available.")
 
-
+"""
+The 'main' function that calculates and displays the dashboard
+"""
 def show_dashboard():
-    participants_placeholder = st.empty()
+    global status_placeholder
+    global participants_placeholder
+ 
+    # Fetch event, questionnaire and participant data once and reuse it
     event_data = fetch_events_data()
     participant_data = fetch_participants_data()
     participant_df = pd.DataFrame(participant_data)
@@ -323,27 +359,26 @@ def show_dashboard():
     participants_status_df = fetch_participants_status(participant_data, event_data)
 
     st.subheader("Participants Status")
-    if participants_status_df is not None:
-        st.dataframe(participants_status_df, use_container_width=True, hide_index=True)
-    else:
-        st.error("Failed to fetch participants status data.")
+    status_placeholder = st.empty()
+    show_participants_status(participants_status_df)
     
     st.subheader("Participants Data")
+    participants_placeholder = st.empty()
     show_participants_data(participant_data)
     
     with st.expander("Add New Participant"):
-        add_participant_form(st, participants_placeholder)
+        add_participant_form(st)
     
     with st.expander("Update Participant"):
-        update_participant_form(st, participants_placeholder)
+        update_participant_form(st)
     
     if st.button('Refresh Data', key='refresh_button1'):
         st.cache_data.clear()
     
-    # Fetch event and participant data once and reuse it
     if questionnaire_data:
         questionnaire_df, timetable_df = transform_questionnaire_data(questionnaire_data)
 
+    # The place where the trial menager/supervisor can look at a specific participant data
     st.subheader("Retrieve Participant's Data")
     user_options2 = participant_df['nickName'].tolist()
     selected_user2 = st.selectbox("Select User for retrieving questions", user_options2)
