@@ -320,8 +320,10 @@ def show_questions(patient_id, questionnaire_df):
             'Question': question_texts,
             'Answer': answers
         })
-        questions_html = questions_df.to_html(index=False, escape=False, justify='right')
-        st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
+       # questions_html = questions_df.to_html(index=False, escape=False, justify='right')
+        st.dataframe(questions_df, use_container_width=True, hide_index=True)
+
+        #st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
 
