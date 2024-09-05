@@ -77,9 +77,13 @@ def refresh_and_display_participants(placeholder):
 def show_participants_data():
     global participants_placeholder
     participant_data = fetch_participants()
+    event_data = fetch_events_data()
+
 
     if participant_data:
         participant_df = pd.DataFrame(participant_data)
+        participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
+
         column_order = [
             'nickName',
             'phone',
@@ -88,7 +92,7 @@ def show_participants_data():
             'created_at',
             'empaticaId',
             'firebaseId',
-            'numOfEventsCurrentDate',
+            'Events total',
             'isActive'
         ]
         participant_df = participant_df[column_order]
@@ -135,8 +139,8 @@ def fetch_participants_status(participant_data, event_data):
         participant_df['Time Since Empatica Update'] = participant_df['Time Since Empatica Update'].apply(format_time_since_update)
 
         # Calculate the remaining fields
-        participant_df['Events last 7 days'] = calculate_average_daily_events(event_data, participant_df, days=7)
-        participant_df['Events total'] = calculate_average_daily_events(event_data, participant_df, days=None)
+        participant_df['Events last 7 days'] = calculate_num_events(event_data, participant_df, days=7)
+        participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
 
         column_order = [
             'nickName',
@@ -185,7 +189,7 @@ def calculate_percentage_of_nan_questions(questionnaire_data, time_limit_hours=N
 """
 Calculate the average number of events per day for each participant.
 """
-def calculate_average_daily_events(event_data, participant_df, days=None):
+def calculate_num_events(event_data, participant_df, days=None):
     # Debugging: Check the type of event_data
     print(f"Type of event_data: {type(event_data)}")
 
@@ -272,18 +276,9 @@ def add_participant_form(form_expander):
 
 def add_event_form(form_expander):
     
-    timestamp = pd.Timestamp.now()
-    timestamp_str = timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-
-    # No location data for now
-    lat = 0.000
-    long = 0.000
-        
+    # Fetch participants data
     participant_data = fetch_participants_data()
     participant_df = pd.DataFrame(participant_data)
-    
-    # Get the current timestamp
-    current_time = pd.Timestamp.now()
     
     with st.form("add_event_form"):
         selected_user = st.selectbox("Select Participant", participant_df['nickName'])
@@ -291,14 +286,21 @@ def add_event_form(form_expander):
         activity = st.selectbox("Activity", ["rest", "eating", "exercise", "other"])
         severity = st.slider("Severity", 0, 4, 3)
         
-        # The slider to select how many hours back from the current time
-        hours_back = st.slider("Select time (Hours ago)", min_value=0, max_value=12, value=0)
-        # Calculate the timestamp based on the hours_back
-        selected_time = current_time - pd.Timedelta(hours=hours_back)
-        timestamp_str = selected_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        # Date and time input controls for selecting event time
+        event_date = st.date_input("Event Date", pd.Timestamp.now())
+        event_time = st.time_input("Event Time", pd.Timestamp.now().time())
+
         submit_button = st.form_submit_button("Submit")
 
         if submit_button:
+            # Combine the selected date and time into a full datetime object
+            selected_datetime = pd.Timestamp.combine(event_date, event_time)
+            timestamp_str = selected_datetime.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+            # No location data for now
+            lat = 0.000
+            long = 0.000
+
             # Get the patientId based on the selected nickname
             selected_participant = participant_df[participant_df['nickName'] == selected_user].iloc[0]
             patientId = selected_participant['patientId']
@@ -314,7 +316,6 @@ def add_event_form(form_expander):
             if response.status_code == 201:
                 st.success("Event posted successfully!")
                 form_expander.empty()
-
             else:
                 st.error(f"Failed to post event. Status code: {response.status_code}")
 
