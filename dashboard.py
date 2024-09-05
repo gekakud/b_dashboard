@@ -6,7 +6,8 @@ from private_config import *
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import messaging
-from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db, get_questions, add_participant_to_db
+from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db
+from api import get_questions, add_participant_to_db, post_event_to_db
 
 status_placeholder = None
 participants_placeholder = None
@@ -73,18 +74,22 @@ def refresh_and_display_participants(placeholder):
     else:
         st.error("Failed to fetch participants or events data.")
 
-def show_participants_data(participant_data):
+def show_participants_data():
     global participants_placeholder
-    
+    participant_data = fetch_participants()
+
     if participant_data:
         participant_df = pd.DataFrame(participant_data)
         column_order = [
             'nickName',
             'phone',
             'patientId',
-            'empatica_status',
+            'empaticaStatus',
             'created_at',
-            'empaticaId'
+            'empaticaId',
+            'firebaseId',
+            'numOfEventsCurrentDate',
+            'isActive'
         ]
         participant_df = participant_df[column_order]
         participants_placeholder.dataframe(participant_df, use_container_width=True, hide_index=True)
@@ -130,16 +135,16 @@ def fetch_participants_status(participant_data, event_data):
         participant_df['Time Since Empatica Update'] = participant_df['Time Since Empatica Update'].apply(format_time_since_update)
 
         # Calculate the remaining fields
-        participant_df['Daily events last 7 days'] = calculate_average_daily_events(event_data, participant_df, days=7)
-        participant_df['Daily events total'] = calculate_average_daily_events(event_data, participant_df, days=None)
+        participant_df['Events last 7 days'] = calculate_average_daily_events(event_data, participant_df, days=7)
+        participant_df['Events total'] = calculate_average_daily_events(event_data, participant_df, days=None)
 
         column_order = [
             'nickName',
             'Time Since Empatica Update',
             'NaN ans last 36 hours (%)',
             'NaN ans total (%)',
-            'Daily events last 7 days',
-            'Daily events total'
+            'Events last 7 days',
+            'Events total'
         ]
 
         participant_df = participant_df[column_order]
@@ -204,7 +209,8 @@ def calculate_average_daily_events(event_data, participant_df, days=None):
     grouped['days'] = grouped['days'].replace(0, 1)
 
     # Calculate the average daily events
-    grouped['average_daily_events'] = grouped['count'] / grouped['days']
+#    grouped['average_daily_events'] = grouped['count'] / grouped['days']
+    grouped['average_daily_events'] = grouped['count']
 
     # Merge this back into the participant DataFrame
     participant_df = participant_df.set_index('patientId').join(grouped[['average_daily_events']]).reset_index()
@@ -255,12 +261,62 @@ def add_participant_form(form_expander):
                 form_expander.empty()
                 #refresh_and_display_participants(placeholder)
                 participant_data = fetch_participants_data()
-                show_participants_data(participant_data)
+#                show_participants_data(participant_data)
+                show_participants_data()
                 event_data = fetch_events_data()
                 participants_status_df = fetch_participants_status(participant_data, event_data)
                 show_participants_status(participants_status_df)
             else:
                 st.error(f"Failed to add participant. Status code: {response.status_code}")
+
+
+def add_event_form(form_expander):
+    
+    timestamp = pd.Timestamp.now()
+    timestamp_str = timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+    # No location data for now
+    lat = 0.000
+    long = 0.000
+        
+    participant_data = fetch_participants_data()
+    participant_df = pd.DataFrame(participant_data)
+    
+    # Get the current timestamp
+    current_time = pd.Timestamp.now()
+    
+    with st.form("add_event_form"):
+        selected_user = st.selectbox("Select Participant", participant_df['nickName'])
+        eventType = st.selectbox("Event Type", ["dissociation", "sadness", "anger", "anxiety", "other" ])   
+        activity = st.selectbox("Activity", ["rest", "eating", "exercise", "other"])
+        severity = st.slider("Severity", 0, 4, 3)
+        
+        # The slider to select how many hours back from the current time
+        hours_back = st.slider("Select time (Hours ago)", min_value=0, max_value=12, value=0)
+        # Calculate the timestamp based on the hours_back
+        selected_time = current_time - pd.Timedelta(hours=hours_back)
+        timestamp_str = selected_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        submit_button = st.form_submit_button("Submit")
+
+        if submit_button:
+            # Get the patientId based on the selected nickname
+            selected_participant = participant_df[participant_df['nickName'] == selected_user].iloc[0]
+            patientId = selected_participant['patientId']
+            deviceId = patientId
+            
+            location = {
+                "lat": lat,
+                "long": long
+            }
+            
+            response = post_event_to_db(patientId, deviceId, timestamp_str, location, eventType, activity, severity)
+            
+            if response.status_code == 201:
+                st.success("Event posted successfully!")
+                form_expander.empty()
+
+            else:
+                st.error(f"Failed to post event. Status code: {response.status_code}")
 
 """
 The place where the trial manager can update a specific user's data
@@ -291,7 +347,8 @@ def update_participant_form(container):
                 container.empty()
                # refresh_and_display_participants(placeholder)
                 participant_data = fetch_participants_data()
-                show_participants_data(participant_data)
+ #               show_participants_data(participant_data)
+                show_participants_data()
                 event_data = fetch_events_data()
                 participants_status_df = fetch_participants_status(participant_data, event_data)
                 show_participants_status(participants_status_df)
@@ -366,7 +423,8 @@ def show_dashboard():
     
     st.subheader("Participants Data")
     participants_placeholder = st.empty()
-    show_participants_data(participant_data)
+#    show_participants_data(participant_data)
+    show_participants_data()
     
     with st.expander("Add New Participant"):
         add_participant_form(st)
@@ -418,6 +476,11 @@ def show_dashboard():
         except Exception as e:
             st.error(f'Failed to get questions from user. Error: {str(e)}')
 
+
+    # Post Event Section
+    st.subheader("Post Event")
+    with st.expander("Add Event"):
+        add_event_form(st)
 
     st.markdown("<hr>", unsafe_allow_html=True)
     
