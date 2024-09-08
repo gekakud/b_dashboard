@@ -74,6 +74,12 @@ def refresh_and_display_participants(placeholder):
     else:
         st.error("Failed to fetch participants or events data.")
 
+def format_timestamp_without_subseconds(timestamp):
+    if pd.notnull(timestamp):
+        return pd.to_datetime(timestamp).strftime('%Y-%m-%dT%H:%M:%S')
+    else:
+        return "N/A"  # Handle missing or invalid timestamps
+
 def show_participants_data():
     global participants_placeholder
     participant_data = fetch_participants()
@@ -82,6 +88,10 @@ def show_participants_data():
 
     if participant_data:
         participant_df = pd.DataFrame(participant_data)
+        
+        # Apply formatting to the created_at column
+        participant_df['created_at'] = participant_df['created_at'].apply(format_timestamp_without_subseconds)
+
         participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
 
         column_order = [
