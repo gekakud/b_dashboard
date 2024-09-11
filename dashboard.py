@@ -36,6 +36,7 @@ def fetch_participants_data():
         for entry in participant_data:
             entry['created_at'] = entry.pop('createdAt', entry.get('created_at', ''))
             entry['updated_at'] = entry.pop('updatedAt', entry.get('updated_at', ''))
+            entry['trial_starting_date'] = entry.get('trialStartingDate', '')  # Adding trialStartingDate field
             entry['empatica_status'] = entry.pop('empaticaStatus', entry.get('empatica_status', ''))
             entry['num_of_events_current_date'] = entry.pop('numOfEventsCurrentDate', entry.get('num_of_events_current_date', ''))
             entry['is_active'] = entry.pop('isActive', entry.get('is_active', ''))
@@ -92,6 +93,7 @@ def show_participants_data():
         
         # Apply formatting to the created_at column
         participant_df['created_at'] = participant_df['created_at'].apply(format_timestamp_without_subseconds)
+        participant_df['trial_starting_date'] = participant_df['trial_starting_date'].apply(format_timestamp_without_subseconds)
 
         participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
 
@@ -101,6 +103,7 @@ def show_participants_data():
             'patientId',
             'empaticaStatus',
             'created_at',
+            'trial_starting_date',  # Add the trialStartingDate column
             'empaticaId',
             'firebaseId',
             'Events total',
@@ -197,6 +200,52 @@ def calculate_percentage_of_nan_questions(questionnaire_data, time_limit_hours=N
         df = df[pd.to_datetime(df['timestamp']) >= cutoff_time]
     return df['answer'].isna().mean() * 100
 
+
+def calculate_displayed_questions(timetable_df, start_date):
+    """
+    Calculate how many questions were scheduled to be displayed to the user from a specific start date until now.
+
+    :param timetable_df: DataFrame that contains the questionnaire timetable with days and times.
+    :param start_date: The specific date from which to start counting the questions.
+    :return: The total number of questions displayed to the user from the start date until now.
+    """
+    # Get the current date and time
+    current_date = pd.Timestamp.now()
+    
+    # Convert the start_date to datetime if it's not already
+    if not isinstance(start_date, pd.Timestamp):
+        start_date = pd.to_datetime(start_date)
+
+    # Initialize a count for displayed questions
+    total_questions_displayed = 0
+
+    # Loop over each day between the start date and current date
+    date_range = pd.date_range(start=start_date, end=current_date, freq='D')
+
+    for current_day in date_range:
+        day_of_week = current_day.strftime('%A')  # Get the day of the week (e.g., 'Monday', 'Tuesday')
+        
+        # Get the timetable for the specific day of the week
+        if day_of_week in timetable_df.columns:
+            for time in timetable_df.index:
+                question_set = timetable_df.at[time, day_of_week]
+                if question_set:
+                    # Check if we are on the final day and should stop counting at the current time
+                    if current_day == current_date.normalize():
+                        # Convert the time to a proper timestamp to compare with the current time
+                        question_time = pd.to_datetime(f"{current_day.date()} {time}")
+                        if question_time > current_date:
+                            continue  # Don't count questions scheduled after the current time
+
+                    # Split the questions (since they are stored as strings like '1, 2, 3')
+                    question_list = question_set.split(', ')
+                    total_questions_displayed += len(question_list)
+
+    return total_questions_displayed
+
+
+
+
 """
 Calculate the average number of events per day for each participant.
 """
@@ -267,10 +316,23 @@ def add_participant_form(form_expander):
         phone = st.text_input("Phone")
         empaticaId = st.text_input("Empatica ID")
         firebaseId = st.text_input("Firebase ID")
+        # Add date and time input fields for trialStartingDate
+        trialStartingDate = st.date_input("Trial Starting Date (Date)", key="trialStartingDate_date-Add")
+        trialStartingTime = st.time_input("Trial Starting Time", key="trialStartingDate_time-Add")
+
         submit_button = st.form_submit_button("Submit")
 
         if submit_button:
-            response = add_participant_to_db(nickName, phone, empaticaId, submit_button)
+            # Combine trialStartingDate and trialStartingTime into a single datetime object
+            if trialStartingDate and trialStartingTime:
+                trialStartingDateTime = datetime.datetime.combine(trialStartingDate, trialStartingTime)
+                trialStartingDateTimeStr = trialStartingDateTime.isoformat()
+            else:
+                trialStartingDateTimeStr = None
+
+            # Post the participant data to the backend
+            response = add_participant_to_db(nickName, phone, empaticaId, firebaseId, trialStartingDateTimeStr)
+ 
             if response.status_code == 201:
                 st.success("Participant added successfully!")
                 form_expander.empty()
@@ -364,16 +426,31 @@ def update_participant_form(container):
         phone = st.text_input("Phone", key="phone")
         empaticaId = st.text_input("Empatica ID", key="empaticaId")
         firebaseId = st.text_input("Firebase ID", key="firebaseId")
+        
+                # Add date and time input fields for trialStartingDate
+        trialStartingDate = st.date_input("Trial Starting Date (Date)", key="trialStartingDate_date-Update")
+        trialStartingTime = st.time_input("Trial Starting Time", key="trialStartingDate_time-Update")
+
+        
+#        trialStartingDate = st.date_input("Trial Starting Date", key="trialStartingDate") 
         isActive = st.selectbox("Is Active", [True, False], key="isActive")
         submit_button = st.form_submit_button("Submit Update")
 
         if submit_button:
+                        # Combine trialStartingDate and trialStartingTime into a single datetime object
+            if trialStartingDate and trialStartingTime:
+                trialStartingDateTime = datetime.datetime.combine(trialStartingDate, trialStartingTime)
+                trialStartingDateTimeStr = trialStartingDateTime.isoformat()
+            else:
+                trialStartingDateTimeStr = None
+                
             updates = {
                 "patientId": patientId,
                 **({"nickName": nickName} if nickName else {}),
                 **({"phone": phone} if phone else {}),
                 **({"empaticaId": empaticaId} if empaticaId else {}),
                 **({"firebaseId": firebaseId} if firebaseId else {}),
+                **({"trialStartingDate": trialStartingDateTimeStr} if trialStartingDateTimeStr else {}),
                 **({"isActive": isActive} if isActive is not None else {})
             }
             response = update_participant_to_db(patientId, updates)
