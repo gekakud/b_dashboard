@@ -352,46 +352,28 @@ def add_event_form(form_expander):
     participant_data = fetch_participants_data()
     participant_df = pd.DataFrame(participant_data)
     
-    # Default event date and time (set only on initial load)
-    default_date = pd.Timestamp.now().date()
-    default_time = pd.Timestamp.now().time()
-    
     with st.form("add_event_form"):
         selected_user = st.selectbox("Select Participant", participant_df['nickName'])
         eventType = st.selectbox("Event Type", ["dissociation", "sadness", "anger", "anxiety", "other" ])   
         activity = st.selectbox("Activity", ["rest", "eating", "exercise", "other"])
         severity = st.slider("Severity", 0, 4, 3)
-        
-        # Date and time input controls for selecting event time
-        event_date = st.date_input("Event Date", default_date)
-        event_time = st.time_input("Event Time", default_time)
-        
-        st.write(f"Debug - Selected Event Date: {event_date}")
-        st.write(f"Debug - Selected Event Time: {event_time}")
+            # Add date and time input fields for trialStartingDate
+        eventDate = st.date_input("Event Date (Date)", key="eventDate_date-Add")
+        eventTime = st.time_input("Event Time", key="eventDate_time-Add")
 
         submit_button = st.form_submit_button("Submit")
 
         if submit_button:
             # Combine the selected date and time into a full datetime object
-            # Debug: Check if event_time is being captured correctly
-            if isinstance(event_time, datetime.time):
-                st.write(f"Debug: event_time is a valid time: {event_time}")
+            if eventDate and eventTime:
+                eventDateTime = datetime.datetime.combine(eventDate, eventTime)
+                eventDateTimeStr = eventDateTime.isoformat()
             else:
-                st.write("Debug: event_time is NOT a valid time.")
-
-            if isinstance(event_date, datetime.date):
-                st.write(f"Debug: event_date is a valid date: {event_date}")
-            else:
-                st.write("Debug: event_date is NOT a valid date.")
-            
-            selected_datetime = datetime.datetime.combine(event_date, event_time)
+                eventDateTimeStr = None
 
             # Show the combined datetime
-            st.write(f"Combined Datetime: {selected_datetime}")
+            st.write(f"Combined Datetime: {eventDateTimeStr}")
             
-            timestamp_str = selected_datetime.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-            st.write(f"Formatted Timestamp: {timestamp_str}")
-
             # No location data for now
             lat = 0.000
             long = 0.000
@@ -405,9 +387,10 @@ def add_event_form(form_expander):
                 "lat": lat,
                 "long": long
             }
+            origin = "assitant"
 
             # Post the event data to the backend
-            response = post_event_to_db(patientId, deviceId, timestamp_str, location, eventType, activity, severity)
+            response = post_event_to_db(patientId, deviceId, eventDateTimeStr, location, eventType, activity, severity, origin)
             
             if response.status_code == 201:
                 st.success("Event posted successfully!")
@@ -509,7 +492,8 @@ def display_events_data(event_data, participant_data):
         merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
         if 'deviceId' in merged_df.columns:
             merged_df.drop(columns=['deviceId'], inplace=True)
-        reordered_columns = ['timestamp', 'nickName', 'severity', 'eventType', 'activity', 'patientId', 'location']
+                
+        reordered_columns = ['timestamp', 'nickName', 'severity', 'eventType', 'activity', 'origin', 'patientId', 'location']
         merged_df = merged_df[reordered_columns]
         events_df_sorted = merged_df.sort_values(by='timestamp', ascending=False)
         st.dataframe(events_df_sorted, use_container_width=True, hide_index=True)

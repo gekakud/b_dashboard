@@ -62,7 +62,7 @@ def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
     response = requests.post(url, json=payload, headers=headers)
     return response
 
-def post_event_to_db(patientId, deviceId, timestamp, location, eventType, activity, severity):
+def post_event_to_db(patientId, deviceId, timestamp, location, eventType, activity, severity, origin):
     """
     Posts a new event to the API.
     
@@ -86,7 +86,8 @@ def post_event_to_db(patientId, deviceId, timestamp, location, eventType, activi
         "Location": location,
         "eventType": eventType,
         "activity": activity,
-        "severity": severity
+        "severity": severity,
+        "origin": origin
     }
     headers = {
         'Content-Type': 'application/json'
