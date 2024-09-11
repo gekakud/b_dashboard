@@ -8,6 +8,7 @@ from firebase_admin import credentials
 from firebase_admin import messaging
 from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db
 from api import get_questions, add_participant_to_db, post_event_to_db
+import datetime
 
 status_placeholder = None
 participants_placeholder = None
@@ -285,10 +286,13 @@ def add_participant_form(form_expander):
 
 
 def add_event_form(form_expander):
-    
     # Fetch participants data
     participant_data = fetch_participants_data()
     participant_df = pd.DataFrame(participant_data)
+    
+    # Default event date and time (set only on initial load)
+    default_date = pd.Timestamp.now().date()
+    default_time = pd.Timestamp.now().time()
     
     with st.form("add_event_form"):
         selected_user = st.selectbox("Select Participant", participant_df['nickName'])
@@ -297,15 +301,34 @@ def add_event_form(form_expander):
         severity = st.slider("Severity", 0, 4, 3)
         
         # Date and time input controls for selecting event time
-        event_date = st.date_input("Event Date", pd.Timestamp.now())
-        event_time = st.time_input("Event Time", pd.Timestamp.now().time())
+        event_date = st.date_input("Event Date", default_date)
+        event_time = st.time_input("Event Time", default_time)
+        
+        st.write(f"Debug - Selected Event Date: {event_date}")
+        st.write(f"Debug - Selected Event Time: {event_time}")
 
         submit_button = st.form_submit_button("Submit")
 
         if submit_button:
             # Combine the selected date and time into a full datetime object
-            selected_datetime = pd.Timestamp.combine(event_date, event_time)
+            # Debug: Check if event_time is being captured correctly
+            if isinstance(event_time, datetime.time):
+                st.write(f"Debug: event_time is a valid time: {event_time}")
+            else:
+                st.write("Debug: event_time is NOT a valid time.")
+
+            if isinstance(event_date, datetime.date):
+                st.write(f"Debug: event_date is a valid date: {event_date}")
+            else:
+                st.write("Debug: event_date is NOT a valid date.")
+            
+            selected_datetime = datetime.datetime.combine(event_date, event_time)
+
+            # Show the combined datetime
+            st.write(f"Combined Datetime: {selected_datetime}")
+            
             timestamp_str = selected_datetime.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            st.write(f"Formatted Timestamp: {timestamp_str}")
 
             # No location data for now
             lat = 0.000
@@ -320,7 +343,8 @@ def add_event_form(form_expander):
                 "lat": lat,
                 "long": long
             }
-            
+
+            # Post the event data to the backend
             response = post_event_to_db(patientId, deviceId, timestamp_str, location, eventType, activity, severity)
             
             if response.status_code == 201:
@@ -328,6 +352,7 @@ def add_event_form(form_expander):
                 form_expander.empty()
             else:
                 st.error(f"Failed to post event. Status code: {response.status_code}")
+
 
 """
 The place where the trial manager can update a specific user's data
