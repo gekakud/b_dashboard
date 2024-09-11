@@ -428,7 +428,7 @@ def display_events_data(event_data, participant_data):
     
     if event_data and participant_data:
         events_df = pd.DataFrame(event_data)
-        events_df['timestamp'] = pd.to_datetime(events_df['timestamp'])
+        events_df['timestamp'] = pd.to_datetime(events_df['timestamp'].apply(format_timestamp_without_subseconds))
         merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
         if 'deviceId' in merged_df.columns:
             merged_df.drop(columns=['deviceId'], inplace=True)
