@@ -9,6 +9,8 @@ from firebase_admin import messaging
 from api import fetch_participants, fetch_questionnaire_data, fetch_events_data,update_participant_to_db
 from api import get_questions, add_participant_to_db, post_event_to_db
 import datetime
+import pytz
+
 
 status_placeholder = None
 participants_placeholder = None
@@ -132,16 +134,42 @@ def fetch_participants_status(participant_data, event_data):
         # Initialize the columns with default float values
         participant_df['NaN ans last 36 hours (%)'] = 0.0
         participant_df['NaN ans total (%)'] = 0.0
+        questionnaire_data = fetch_questionnaire_data()
+        questionnaire_df, timetable_df = transform_questionnaire_data(questionnaire_data)
 
+        end_date_36hr = pd.Timestamp.now()
+        start_date_36hr = end_date_36hr - pd.Timedelta(hours=36)
+        
         # Iterate over each participant to fetch and process their questionnaire data
         for idx, participant in participant_df.iterrows():
             patient_id = participant['patientId']
             questions_data = get_questions(patient_id)
+            patient_start_trial_str = participant['trialStartingDate']
+            
+            # If no date for starting trial - take last 14 days
+            if patient_start_trial_str == 'None':
+                patient_start_trial = end_date_36hr - pd.Timedelta(days=14)
+            else:
+                patient_start_trial = pd.to_datetime(patient_start_trial_str)
+
+            # Trial is 14 days
+            total_end_date = patient_start_trial + pd.Timedelta(days=14)
+            
+            # Localize to Israel timezone (Asia/Jerusalem)
+            israel_tz = pytz.timezone('Asia/Jerusalem')
+
+            # Ensure both timestamps are timezone-aware with Israel time zone
+            total_end_date = total_end_date.tz_convert(israel_tz) if total_end_date.tzinfo else total_end_date.tz_localize(israel_tz)
+            end_date_36hr = end_date_36hr.tz_convert(israel_tz) if end_date_36hr.tzinfo else end_date_36hr.tz_localize(israel_tz)
+
+
+            if total_end_date > end_date_36hr:
+                total_end_date = end_date_36hr
+        
 
             if questions_data:
-                # Calculate percentage of NaN questions in the last 36 hours and total
-                percentage_last_36_hours = calculate_percentage_of_nan_questions(questions_data, time_limit_hours=36)
-                percentage_total = calculate_percentage_of_nan_questions(questions_data, time_limit_hours=None)
+                percentage_last_36_hours = calculate_percentage_of_nan_questions(questions_data, timetable_df,start_date_36hr, end_date_36hr)
+                percentage_total = calculate_percentage_of_nan_questions(questions_data, timetable_df, patient_start_trial, total_end_date)
 
                 participant_df.at[idx, 'NaN ans last 36 hours (%)'] = percentage_last_36_hours
                 participant_df.at[idx, 'NaN ans total (%)'] = percentage_total
@@ -193,34 +221,92 @@ def format_time_since_update(hours):
         remaining_hours = hours % 24
         return f"{days} days, {remaining_hours:.1f} Hrs"
 
-def calculate_percentage_of_nan_questions(questionnaire_data, time_limit_hours=None):
-    df = pd.DataFrame(questionnaire_data)
-    if time_limit_hours is not None:
-        cutoff_time = pd.Timestamp.now() - pd.Timedelta(hours=time_limit_hours)
-        df = df[pd.to_datetime(df['timestamp']) >= cutoff_time]
-    return df['answer'].isna().mean() * 100
-
-
-def calculate_displayed_questions(timetable_df, start_date):
+def calculate_percentage_of_nan_questions(questions_data, timetable_df, start_date, end_date):
     """
-    Calculate how many questions were scheduled to be displayed to the user from a specific start date until now.
+    Calculate the percentage of unanswered (NaN) questions by dividing the number of answered questions 
+    by the total number of questions that were displayed in the given date range.
+
+    :param questions_data: DataFrame that contains the answers from the user.
+    :param timetable_df: DataFrame that contains the questionnaire timetable with days and times.
+    :param start_date: The specific date from which to start counting the questions.
+    :param end_date: The specific date until which to count the questions.
+    :return: The percentage of unanswered (NaN) questions.
+    """
+    # Create a DataFrame from the questionnaire data
+    df = pd.DataFrame(questions_data)
+
+    # Set the Israel timezone (Asia/Jerusalem)
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+
+    # Convert both start_date and end_date to timezone-aware if they are not already
+    start_date = pd.to_datetime(start_date).tz_localize(israel_tz) if start_date.tzinfo is None else start_date
+    end_date = pd.to_datetime(end_date).tz_localize(israel_tz) if end_date.tzinfo is None else end_date
+
+    # Ensure that the dataframe's 'timestamp' column is timezone-aware too
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # If 'timestamp' is tz-naive (no timezone), localize it to Israel time
+    if df['timestamp'].dt.tz is None:
+        df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz)
+
+    # Filter the questionnaire data to only include answers within the specified date range
+    df_filtered = df[(df['timestamp'] >= pd.to_datetime(start_date)) & (df['timestamp'] <= pd.to_datetime(end_date))]
+
+    # Count the number of valid answers (answers in the range of 0-4)
+    valid_answers_count = df_filtered['answer'].between(0, 4, inclusive="both").sum()
+
+    # Calculate the total number of questions that were supposed to be displayed within the date range
+    total_questions_displayed = calculate_displayed_questions(timetable_df, start_date, end_date)
+
+    # Edge case: If no questions were displayed, return 100% unanswered
+    if total_questions_displayed == 0:
+        return 100.0
+
+    # Calculate the percentage of unanswered (NaN) questions
+    unanswered_percentage = 100.0 * (1 - (valid_answers_count / total_questions_displayed))
+
+    return unanswered_percentage
+
+
+
+
+def calculate_displayed_questions(timetable_df, start_date, end_date):
+    """
+    Calculate how many questions were scheduled to be displayed to the user from a specific start date until the end date.
 
     :param timetable_df: DataFrame that contains the questionnaire timetable with days and times.
     :param start_date: The specific date from which to start counting the questions.
-    :return: The total number of questions displayed to the user from the start date until now.
+    :param end_date: The specific date until which to count the questions.
+    :return: The total number of questions displayed to the user from the start date until the end date.
     """
-    # Get the current date and time
-    current_date = pd.Timestamp.now()
-    
-    # Convert the start_date to datetime if it's not already
+    # Convert the start_date and end_date to datetime if they're not already
     if not isinstance(start_date, pd.Timestamp):
         start_date = pd.to_datetime(start_date)
+    if not isinstance(end_date, pd.Timestamp):
+        end_date = pd.to_datetime(end_date)
+    
+    # Set the Israel timezone (Asia/Jerusalem)
+    israel_tz = pytz.timezone('Asia/Jerusalem')
+
+    # Make sure both are either timezone-aware with the same timezone, or timezone-naive
+    if start_date.tzinfo is None:
+        start_date = start_date.tz_localize(israel_tz)
+    else:
+        start_date = start_date.tz_convert(israel_tz)
+
+    if end_date.tzinfo is None:
+        end_date = end_date.tz_localize(israel_tz)
+    else:
+        end_date = end_date.tz_convert(israel_tz)
+    # Ensure that the end_date is not earlier than the start_date
+    if end_date < start_date:
+        raise ValueError("end_date must be after start_date")
 
     # Initialize a count for displayed questions
     total_questions_displayed = 0
 
-    # Loop over each day between the start date and current date
-    date_range = pd.date_range(start=start_date, end=current_date, freq='D')
+    # Loop over each day between the start date and end date
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
 
     for current_day in date_range:
         day_of_week = current_day.strftime('%A')  # Get the day of the week (e.g., 'Monday', 'Tuesday')
@@ -230,19 +316,18 @@ def calculate_displayed_questions(timetable_df, start_date):
             for time in timetable_df.index:
                 question_set = timetable_df.at[time, day_of_week]
                 if question_set:
-                    # Check if we are on the final day and should stop counting at the current time
-                    if current_day == current_date.normalize():
-                        # Convert the time to a proper timestamp to compare with the current time
+                    # Check if we are on the final day and should stop counting at the end date's time
+                    if current_day == end_date.normalize():
+                        # Convert the time to a proper timestamp to compare with the end date
                         question_time = pd.to_datetime(f"{current_day.date()} {time}")
-                        if question_time > current_date:
-                            continue  # Don't count questions scheduled after the current time
+                        if question_time > end_date:
+                            continue  # Don't count questions scheduled after the end date's time
 
                     # Split the questions (since they are stored as strings like '1, 2, 3')
                     question_list = question_set.split(', ')
                     total_questions_displayed += len(question_list)
 
     return total_questions_displayed
-
 
 
 
