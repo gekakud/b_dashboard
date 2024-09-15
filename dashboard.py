@@ -300,7 +300,8 @@ def calculate_displayed_questions(timetable_df, start_date, end_date):
         end_date = end_date.tz_convert(israel_tz)
     # Ensure that the end_date is not earlier than the start_date
     if end_date < start_date:
-        raise ValueError("end_date must be after start_date")
+        end_date = start_date + pd.Timedelta(hours=36)
+    #    raise ValueError("end_date must be after start_date")
 
     # Initialize a count for displayed questions
     total_questions_displayed = 0
