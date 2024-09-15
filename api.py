@@ -48,13 +48,14 @@ def fetch_questionnaire_data():
     except Exception:
         return None
     
-def add_participant_to_db(nickName, phone, empaticaId, firebaseId):
+def add_participant_to_db(nickName, phone, empaticaId, firebaseId,trialStartingDateTimeStr):
     url = f"{BASE_URL}/participants/"
     payload = {
         "nickName": nickName,
         "phone": phone,
         "empaticaId": empaticaId,
-        "firebaseId": firebaseId
+        "firebaseId": firebaseId,
+        "trialStartingDate": trialStartingDateTimeStr
     }
     headers = {
         'Content-Type': 'application/json'
