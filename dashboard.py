@@ -545,26 +545,30 @@ def show_questions(patient_id, questionnaire_df):
         question_texts = []
         answers = []
         for question in sorted_questions:
-            question_num = question.get('questionNum')
-            question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_num, 'השאלה'].iloc[0]
-            answer = question.get('answer', 'No answer provided')
-            timestamp = question.get('timestamp', 'No timestamp provided')
-            formatted_timestamp = pd.to_datetime(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-            timestamps.append(formatted_timestamp)
-            question_texts.append(question_text)
-            answers.append(answer)
+            answer = question.get('answer', None)
+            # Only include questions with valid answers (i.e., answers that are not None)
+            if answer is not None:
+                question_num = question.get('questionNum')
+                question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_num, 'השאלה'].iloc[0]
+                timestamp = question.get('timestamp', 'No timestamp provided')
+                formatted_timestamp = pd.to_datetime(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                timestamps.append(formatted_timestamp)
+                question_texts.append(question_text)
+                answers.append(answer)
 
-        questions_df = pd.DataFrame({
-            'Timestamp': timestamps,
-            'Question': question_texts,
-            'Answer': answers
-        })
-       # questions_html = questions_df.to_html(index=False, escape=False, justify='right')
-        st.dataframe(questions_df, use_container_width=True, hide_index=True)
-
-        #st.markdown(f"<div style='direction: rtl; text-align: right;'>{questions_html}</div>", unsafe_allow_html=True)
+        # Create a DataFrame only with questions that have valid answers
+        if timestamps:
+            questions_df = pd.DataFrame({
+                'Timestamp': timestamps,
+                'Question': question_texts,
+                'Answer': answers
+            })
+            st.dataframe(questions_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("No questions with answers found.")
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
+
 
 """
 Displays the table of events of all participants
