@@ -242,7 +242,9 @@ def calculate_percentage_of_nan_questions(questions_data, timetable_df, start_da
     end_date = pd.to_datetime(end_date).tz_localize(israel_tz) if end_date.tzinfo is None else end_date
 
     # Ensure that the dataframe's 'timestamp' column is timezone-aware too
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
+#    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce', format='mixed')
+
 
     # If 'timestamp' is tz-naive (no timezone), localize it to Israel time
     if df['timestamp'].dt.tz is None:
