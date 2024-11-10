@@ -11,7 +11,6 @@ from api import get_questions, add_participant_to_db, post_event_to_db
 import datetime
 import pytz
 
-
 status_placeholder = None
 participants_placeholder = None
 
@@ -539,36 +538,37 @@ def update_participant_form(container):
 
 def show_questions(patient_id, questionnaire_df):
     questions_data = get_questions(patient_id)
+    
     if questions_data and questionnaire_df is not None:
-        sorted_questions = sorted(questions_data, key=lambda x: x['timestamp'], reverse=True)
         timestamps = []
         question_texts = []
         answers = []
-        for question in sorted_questions:
-            answer = question.get('answer', None)
-            # Only include questions with valid answers (i.e., answers that are not None)
-            if answer is not None:
-                question_num = question.get('questionNum')
-                question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_num, 'השאלה'].iloc[0]
-                timestamp = question.get('timestamp', 'No timestamp provided')
-                formatted_timestamp = pd.to_datetime(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-                timestamps.append(formatted_timestamp)
-                question_texts.append(question_text)
-                answers.append(answer)
 
-        # Create a DataFrame only with questions that have valid answers
+        # שלב 1: עבור על כל השאלות, כולל הערכים של None
+        for question in questions_data:
+            answer = question.get('answer', None)  # נכלול גם את התשובות עם None
+            question_num = question.get('questionNum')
+            question_text = questionnaire_df.loc[questionnaire_df['מס שאלה'] == question_num, 'השאלה'].iloc[0]
+            timestamp = question.get('timestamp', 'No timestamp provided')
+            formatted_timestamp = pd.to_datetime(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+            timestamps.append(formatted_timestamp)
+            question_texts.append(question_text)
+            answers.append(answer)
+
+        # יצירת DataFrame להצגה
         if timestamps:
             questions_df = pd.DataFrame({
                 'Timestamp': timestamps,
                 'Question': question_texts,
                 'Answer': answers
             })
+            questions_df.sort_values(by='Timestamp', ascending=False, inplace=True)
             st.dataframe(questions_df, use_container_width=True, hide_index=True)
         else:
             st.warning("No questions with answers found.")
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
-
 
 """
 Displays the table of events of all participants
