@@ -182,12 +182,12 @@ def transform_questionnaire_data(questionnaire_data):
 # ----------------------------
 # CALCULATIONS (TZ-AWARE)
 # ----------------------------
-def calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs):
-    """
+"""def calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs):
+    
     How many questions were scheduled in the past `hrs` hours,
     ignoring questions not yet "due."
     All times are tz-aware in Asia/Jerusalem.
-    """
+    
     start_time = current_time - pd.Timedelta(hours=hrs)
     end_time = current_time
 
@@ -218,8 +218,8 @@ def calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs):
                     if questions:
                         total_questions += len(questions.split(', '))
     return total_questions
-
-def calculate_percentage_of_nan_X_questions(questions_data, timetable_df, current_time, hrs):
+"""
+def calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, hrs):
     """
     % of unanswered questions in the last `hrs` hours, tz-aware.
     """
@@ -230,19 +230,22 @@ def calculate_percentage_of_nan_X_questions(questions_data, timetable_df, curren
         raise ValueError("The 'timestamp' column is missing from questions_data.")
 
     # 1. total scheduled
-    total_scheduled = calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs)
+    #total_scheduled = calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs)
+    end_date = current_time
+    start_date = end_date - pd.Timedelta(hours=hrs)
+
+    total_scheduled = calculate_displayed_questions(timetable_df, start_date, end_date)
+
 
     # 2. convert question timestamps -> tz-aware
     questions_data['timestamp'] = pd.to_datetime(questions_data['timestamp'], errors='coerce')
     # localize as Israel
-  #  questions_data['timestamp'] = questions_data['timestamp'].dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
     questions_data['timestamp'] = questions_data['timestamp'].dt.tz_localize(israel_tz)
 
     # 3. window for answered questions
-    start_time = current_time - pd.Timedelta(hours=hrs)
     answered_questions = questions_data[
-        (questions_data['timestamp'] >= start_time) &
-        (questions_data['timestamp'] < current_time)
+        (questions_data['timestamp'] >= start_date) &
+        (questions_data['timestamp'] < end_date)
     ]
 
     answered_count = len(answered_questions)
@@ -250,7 +253,7 @@ def calculate_percentage_of_nan_X_questions(questions_data, timetable_df, curren
     if total_scheduled > 0:
         unanswered_percentage = (unanswered_count / total_scheduled) * 100
     else:
-        unanswered_percentage = 100.0
+        unanswered_percentage = 0.0
 
     return unanswered_percentage
 
@@ -389,6 +392,9 @@ def calculate_displayed_questions(timetable_df, start_date, end_date):
                     question_time_str = f"{current_day.strftime('%Y-%m-%d')} {time}"
     #                question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz, ambiguous='NaT', nonexistent='shift_forward')
                     question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz)
+                    # Now skip if outside the actual [start_date, end_date] range
+                    if question_time < start_date:
+                        continue
                     if question_time > end_date:
                         continue
                     question_list = question_set.split(', ')
@@ -437,6 +443,7 @@ def fetch_participants_status(participant_data, event_data):
     """
     if participant_data and event_data:
         participant_df = pd.DataFrame(participant_data)
+ #       participant_df = participant_df[participant_df["is_active"] == "True"]
 
         # Convert empatica_last_update to tz-aware
         participant_df['empatica_last_update'] = pd.to_datetime(participant_df['empatica_last_update'], errors='coerce')
@@ -464,8 +471,8 @@ def fetch_participants_status(participant_data, event_data):
             # trial start date
             patient_start_str = participant.get('trialStartingDate', None)
             if not patient_start_str or patient_start_str == 'None':
-                # default to 14 days ago
-                patient_start_trial = end_date_36hr - pd.Timedelta(days=14)
+                # default to 30 days ago
+                patient_start_trial = end_date_36hr - pd.Timedelta(days=30)
             else:
                 patient_start_trial = pd.to_datetime(patient_start_str, errors='coerce')
                 if pd.isna(patient_start_trial):
@@ -474,8 +481,8 @@ def fetch_participants_status(participant_data, event_data):
                 if patient_start_trial.tzinfo is None:
                     patient_start_trial = israel_tz.localize(patient_start_trial)
 
-            # trial is 14 days
-            total_end_date = patient_start_trial + pd.Timedelta(days=14)
+            # trial is 30 days
+            total_end_date = patient_start_trial + pd.Timedelta(days=30)
             # if it’s in future, cap it
             if total_end_date > end_date_36hr:
                 total_end_date = end_date_36hr
@@ -483,7 +490,7 @@ def fetch_participants_status(participant_data, event_data):
             if questions_data:
                 # 1. last 36 hours unanswered
                 current_time = pd.Timestamp.now(tz=israel_tz)
-                perc_36_hrs = calculate_percentage_of_nan_X_questions(questions_data, timetable_df, current_time, 36)
+                perc_36_hrs = calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, 36)
 
                 # 2. total unanswered from trial start
                 perc_total = calculate_percentage_of_nan_questions(questions_data, timetable_df, patient_start_trial, total_end_date)
@@ -492,7 +499,6 @@ def fetch_participants_status(participant_data, event_data):
                 valid_answers_count = compute_valid_answers_count(
                     questions_data, 
                     start_date=patient_start_trial, 
-#                    end_date=pd.Timestamp.now(tz=israel_tz)
                     end_date=total_end_date
                 )
                 
@@ -524,13 +530,15 @@ def fetch_participants_status(participant_data, event_data):
         participant_df['Events last 7 days'] = calculate_num_events(event_data, participant_df, days=7)
         participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
 
+        participant_df = participant_df[participant_df["is_active"] == "True"].copy()
+
         # reorder columns
         # Reorder columns (including the new one)
         column_order = [
             'nickName',
             'Time Since Empatica Update',
-            'Valid Answers Since Trial',
-            'Displayed Questions Since Trial',  # <-- NEW
+     #       'Valid Answers Since Trial',
+     #       'Displayed Questions Since Trial',  # <-- NEW
             'NaN ans last 36 hours (%)',
             'NaN ans total (%)',
             'Events last 7 days',
