@@ -6,6 +6,10 @@ from private_config import *
 import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import messaging
+import re
+import datetime
+
+
 from api import (
     fetch_participants, 
     fetch_questionnaire_data, 
@@ -179,46 +183,6 @@ def transform_questionnaire_data(questionnaire_data):
     df = df[['סוג', 'השאלה', 'מס שאלה']]
     return df, timetable
 
-# ----------------------------
-# CALCULATIONS (TZ-AWARE)
-# ----------------------------
-"""def calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs):
-    
-    How many questions were scheduled in the past `hrs` hours,
-    ignoring questions not yet "due."
-    All times are tz-aware in Asia/Jerusalem.
-    
-    start_time = current_time - pd.Timedelta(hours=hrs)
-    end_time = current_time
-
-    # Day name map
-    days_of_week = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-    total_questions = 0
-
-    # For each timeslot in timetable
-    for time in timetable_df.index:  # "10:00", "14:00", etc.
-        for day_name in timetable_df.columns:  # "Sunday", "Monday", ...
-            schedule_day_index = days_of_week.index(day_name)
-            current_day_index = current_time.weekday()
-
-            # How many days back do we go?
-            days_back = (current_day_index - schedule_day_index) % 7
-            scheduled_date = current_time - pd.Timedelta(days=days_back)
-
-            # Build a tz-aware datetime
-            # e.g. "2023-08-30 10:00 +03:00"
-            scheduled_time_str = f"{scheduled_date.strftime('%Y-%m-%d')} {time}"
-            scheduled_time = pd.to_datetime(scheduled_time_str, errors='coerce').tz_localize(current_time.tz)
-
-            if start_time <= scheduled_time < end_time:
-                # If the 4-hour "deadline" passed
-                deadline = scheduled_time + pd.Timedelta(hours=4)
-                if current_time > deadline:
-                    questions = timetable_df.at[time, day_name]
-                    if questions:
-                        total_questions += len(questions.split(', '))
-    return total_questions
-"""
 def calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, hrs):
     """
     % of unanswered questions in the last `hrs` hours, tz-aware.
@@ -327,8 +291,9 @@ def calculate_percentage_of_nan_questions(questions_data, timetable_df, start_da
 
     # Convert to tz-aware
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
- #   df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
     df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz)
+
+
 
     # Convert the start_date / end_date to tz-aware if naive
     start_date = pd.to_datetime(start_date, errors='coerce')
@@ -413,6 +378,7 @@ def compute_valid_answers_count(questions_data, start_date, end_date):
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 #   df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
     df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz)
+ 
 
     # localize start/end if needed
     start_date = pd.to_datetime(start_date, errors='coerce')
@@ -648,16 +614,28 @@ def add_event_form(form_expander):
         submit_button = st.form_submit_button("Submit")
         if submit_button:
             if eventDate and eventTime:
+                # 1) Combine into a naive datetime
                 event_dt = datetime.datetime.combine(eventDate, eventTime)
+                
+                # 2) Localize to Israel time
+                israel_tz = pytz.timezone("Asia/Jerusalem")
                 event_dt_aware = israel_tz.localize(event_dt)
-                eventDateTimeStr = event_dt_aware.isoformat()
+                
+                # 3) Convert to UTC
+                event_dt_utc = event_dt_aware.astimezone(pytz.utc)
+                
+                # 4) Format as 'yyyy-MM-dd HH:mm:ss.SSSZ' with 3 decimal places
+                #    e.g. "2025-01-01 15:00:00.123Z"
+                #    We'll format microseconds and then slice off to 3 decimals:
+                eventDateTimeStr = event_dt_utc.strftime("%Y-%m-%d %H:%M:%S.%fZ")
+
             else:
                 eventDateTimeStr = None
 
             st.write(f"Combined Datetime: {eventDateTimeStr}")
             
             lat = 0.0
-            long = 0.0
+            long = 0.0            
             selected_participant = participant_df[participant_df['nickName'] == selected_user].iloc[0]
             patientId = selected_participant['patientId']
             deviceId = patientId
@@ -714,16 +692,56 @@ def show_questions(patient_id, questionnaire_df):
     else:
         st.error("Failed to retrieve questions or questionnaire data.")
 
+
+def ensure_microseconds(ts):
+    """ 
+    Converts ts to a string if possible and appends .000000 if no decimal fraction is found.
+    """
+    # 1. If ts is None/NaN, just return it
+    if pd.isnull(ts):
+        return ts  # This will remain NaN/None
+
+    # 2. If ts is already a datetime (e.g., from earlier parsing), convert it to string
+    if isinstance(ts, datetime.datetime):
+        ts_str = ts.isoformat()
+    else:
+        # Otherwise, just turn it into a string
+        ts_str = str(ts)
+
+    # 3. If the string already has '.', it presumably has microseconds
+    if '.' in ts_str:
+        return ts_str
+
+    # 4. Add '.000000' before any +HH:MM, -HH:MM, or trailing 'Z'
+    match = re.search(r'([+\-]\d{2}:\d{2}|Z)$', ts_str)
+    if match:
+        idx = match.start()
+        return ts_str[:idx] + '.000000' + ts_str[idx:]
+    else:
+        # If no offset or 'Z' found, just append .000000
+        return ts_str + '.000000'
+    
+
 def display_events_data(event_data, participant_data):
     participant_df = pd.DataFrame(participant_data)
     if event_data and participant_data:
         events_df = pd.DataFrame(event_data)
-        events_df['timestamp'] = pd.to_datetime(events_df['timestamp'], errors='coerce')
-#        events_df['timestamp'] = events_df['timestamp'].dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
-        events_df['timestamp'] = events_df['timestamp'].dt.tz_localize(israel_tz)
+        
+         # A) Convert the column to strings with microseconds if missing
+        events_df['timestamp'] = events_df['timestamp'].apply(
+            lambda x: ensure_microseconds(x) if pd.notnull(x) else x
+        )
 
+        # B) Now parse to datetime
+        events_df['timestamp'] = pd.to_datetime(events_df['timestamp'], errors='coerce')
+
+        # C) Format for display
+        events_df['timestamp'] = events_df['timestamp'].apply(
+            lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None
+        )
+        
         # For display, optionally convert to a string without microseconds
-        events_df['timestamp'] = events_df['timestamp'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None)
+    #    events_df['timestamp'] = events_df['timestamp'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None)
 
         merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
         if 'deviceId' in merged_df.columns:
@@ -793,8 +811,20 @@ def show_dashboard():
             selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
             patient_id = selected_partici['patientId']
             user_events = pd.DataFrame(event_data)
-       #     user_events['timestamp'] = pd.to_datetime(user_events['timestamp'], errors='coerce').dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
-            user_events['timestamp'] = pd.to_datetime(user_events['timestamp'], errors='coerce').dt.tz_localize(israel_tz)
+                     
+            # Step A: Ensure microseconds for any raw string that lacks them
+            user_events['timestamp'] = user_events['timestamp'].apply(
+                lambda x: ensure_microseconds(x) if pd.notnull(x) else x
+            )
+
+            # Step B: Convert to datetime
+            user_events['timestamp'] = pd.to_datetime(user_events['timestamp'], errors='coerce')
+
+            # (Optional) Step C: Format for display
+            user_events['timestamp'] = user_events['timestamp'].apply(
+                lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None
+            )
+         
             user_events = user_events[user_events['patientId'] == patient_id]
             if not user_events.empty:
                 user_events_sorted = user_events.sort_values(by='timestamp', ascending=False)
