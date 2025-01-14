@@ -183,43 +183,125 @@ def transform_questionnaire_data(questionnaire_data):
     df = df[['סוג', 'השאלה', 'מס שאלה']]
     return df, timetable
 
+
+
+israel_tz = pytz.timezone("Asia/Jerusalem")
+
 def calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, hrs):
     """
-    % of unanswered questions in the last `hrs` hours, tz-aware.
+    1) Get unique question numbers displayed in [current_time - hrs, current_time).
+    2) Get unique question numbers answered by user in that same window.
+    3) Percentage of displayed questions that do NOT appear in the answered set.
+
+    Assumes `current_time` is tz-aware in 'Asia/Jerusalem' 
+    and that 'timestamp' in questions_data can be parsed as well.
     """
+
+    # ----------------------------------------------------------------
+    # STEP 0: Ensure current_time is tz-aware
+    # ----------------------------------------------------------------
+    if current_time.tzinfo is None:
+        # If you want everything in 'Asia/Jerusalem', localize it
+        current_time = israel_tz.localize(current_time)
+
+    # build start_time
+    start_time = current_time - pd.Timedelta(hours=hrs)
+
+    # ----------------------------------------------------------------
+    # STEP A: Gather displayed questions in [start_time, current_time)
+    # ----------------------------------------------------------------
+    displayed_set = set()
+
+    # If you want to keep times tz-aware, ensure .normalize() doesn't drop tz
+    # We'll do it manually:
+    start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    current_day = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    date_range = pd.date_range(
+        start=start_day,
+        end=current_day,
+        freq='D'
+    )
+
+    for day_dt in date_range:
+        # localize this day_dt to 'Asia/Jerusalem' if it's naive
+        if day_dt.tzinfo is None:
+            day_dt = day_dt.tz_localize(israel_tz)
+
+        for hour in timetable_df.index:  # e.g. "10:00", "14:00", ...
+            slot_time_str = f"{day_dt.strftime('%Y-%m-%d')} {hour}"
+            slot_time = pd.to_datetime(slot_time_str, errors='coerce')
+
+            if pd.notnull(slot_time) and slot_time.tzinfo is None:
+                slot_time = slot_time.tz_localize(israel_tz)
+
+            # Now compare slot_time with [start_time, current_time)
+            if slot_time is None or pd.isna(slot_time):
+                continue
+
+            if not (start_time <= slot_time < current_time):
+                continue
+
+            # Check which questions are displayed at (hour, day_of_week)
+            day_of_week = slot_time.strftime('%A')
+            if day_of_week not in timetable_df.columns:
+                continue
+
+            question_set_str = timetable_df.at[hour, day_of_week]
+            if not question_set_str:
+                continue
+
+            # e.g. "5, 7, 12"
+            question_nums = [q.strip() for q in question_set_str.split(',')]
+            for qnum in question_nums:
+                displayed_set.add(qnum)
+
+    displayed_count = len(displayed_set)
+    if displayed_count == 0:
+        # No questions displayed -> 0% unanswered
+        return 0.0
+
+    # ----------------------------------------------------------------
+    # STEP B: Gather answered questions in the past X hours
+    # ----------------------------------------------------------------
+    # Convert questions_data to DataFrame if it's a list
     if isinstance(questions_data, list):
         questions_data = pd.DataFrame(questions_data)
 
-    if 'timestamp' not in questions_data.columns:
-        raise ValueError("The 'timestamp' column is missing from questions_data.")
+    if 'timestamp' not in questions_data.columns or 'questionNum' not in questions_data.columns:
+        raise ValueError("questions_data is missing 'timestamp' or 'questionNum' columns")
 
-    # 1. total scheduled
-    #total_scheduled = calculate_scheduled_questions_last_X_hours(timetable_df, current_time, hrs)
-    end_date = current_time
-    start_date = end_date - pd.Timedelta(hours=hrs)
-
-    total_scheduled = calculate_displayed_questions(timetable_df, start_date, end_date)
-
-
-    # 2. convert question timestamps -> tz-aware
+    # Convert question timestamps
     questions_data['timestamp'] = pd.to_datetime(questions_data['timestamp'], errors='coerce')
-    # localize as Israel
-    questions_data['timestamp'] = questions_data['timestamp'].dt.tz_localize(israel_tz)
 
-    # 3. window for answered questions
-    answered_questions = questions_data[
-        (questions_data['timestamp'] >= start_date) &
-        (questions_data['timestamp'] < end_date)
-    ]
+    # If some rows are naive and you want them also in 'Asia/Jerusalem', do:
+    def localize_if_naive(dt):
+        if pd.notnull(dt) and dt.tzinfo is None:
+            return dt.tz_localize(israel_tz)
+        return dt
 
-    answered_count = len(answered_questions)
-    unanswered_count = total_scheduled - answered_count
-    if total_scheduled > 0:
-        unanswered_percentage = (unanswered_count / total_scheduled) * 100
-    else:
-        unanswered_percentage = 0.0
+    questions_data['timestamp'] = questions_data['timestamp'].apply(localize_if_naive)
 
+    # Filter to [start_time, current_time)
+    answered_in_window = questions_data[
+        (questions_data['timestamp'] >= start_time) &
+        (questions_data['timestamp'] < current_time)
+    ].copy()
+
+    # Build a set of questionNums answered in that window
+    answered_in_window['questionNum'] = answered_in_window['questionNum'].astype(str)
+    answered_set = set(answered_in_window['questionNum'].unique())
+
+    # ----------------------------------------------------------------
+    # STEP C: Compute difference
+    # ----------------------------------------------------------------
+    not_answered = displayed_set - answered_set
+    unanswered_count = len(not_answered)
+
+    unanswered_percentage = (unanswered_count / displayed_count) * 100
     return unanswered_percentage
+
+
+
 
 def calculate_num_events(event_data, participant_df, days=None):
     """
@@ -367,6 +449,56 @@ def calculate_displayed_questions(timetable_df, start_date, end_date):
 
     return total_questions_displayed
 
+
+
+
+def displayed_questions_numbers(timetable_df, start_date, end_date):
+    """
+    How many questions were scheduled from start_date to end_date, tz-aware.
+    """
+    start_date = start_date.tz_convert("Asia/Jerusalem")
+    end_date = end_date.tz_convert("Asia/Jerusalem")
+    # Ensure tz-aware
+    if start_date.tzinfo is None:
+        start_date = israel_tz.localize(start_date)
+    if end_date.tzinfo is None:
+        end_date = israel_tz.localize(end_date)
+    if end_date < start_date:
+        end_date = start_date + pd.Timedelta(hours=36)
+
+    total_questions_displayed = 0
+    # If start_date and end_date are both tz-aware in Asia/Jerusalem:
+    date_range = pd.date_range(
+        start=start_date, 
+        end=end_date,
+        freq='D'
+    )
+    # No tz parameter needed; Pandas takes the timezone from start/end.
+    days_of_week_map = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday',
+                        4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
+
+    for current_day in date_range:
+        day_of_week = current_day.strftime('%A')  # e.g. 'Monday'
+        if day_of_week in timetable_df.columns:
+            for time in timetable_df.index:
+                question_set = timetable_df.at[time, day_of_week]
+                if question_set:
+                    # Build a dt for this date+time
+                    question_time_str = f"{current_day.strftime('%Y-%m-%d')} {time}"
+    #                question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz, ambiguous='NaT', nonexistent='shift_forward')
+                    question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz)
+                    # Now skip if outside the actual [start_date, end_date] range
+                    if question_time < start_date:
+                        continue
+                    if question_time > end_date:
+                        continue
+                    question_list = question_set.split(', ')
+                    total_questions_displayed += len(question_list)
+
+    return total_questions_displayed
+
+
+
 def compute_valid_answers_count(questions_data, start_date, end_date):
     """
     Number of valid answers (0-4) in [start_date, end_date], tz-aware.
@@ -414,7 +546,6 @@ def fetch_participants_status(participant_data, event_data):
         # Convert empatica_last_update to tz-aware
         participant_df['empatica_last_update'] = pd.to_datetime(participant_df['empatica_last_update'], errors='coerce')
         participant_df['empatica_last_update'] = participant_df['empatica_last_update'].apply(
-   #         lambda x: x.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT') if pd.notnull(x) and x.tzinfo is None else x
             lambda x: x.tz_localize(israel_tz) if pd.notnull(x) and x.tzinfo is None else x
         )
 
@@ -499,12 +630,9 @@ def fetch_participants_status(participant_data, event_data):
         participant_df = participant_df[participant_df["is_active"] == "True"].copy()
 
         # reorder columns
-        # Reorder columns (including the new one)
         column_order = [
             'nickName',
             'Time Since Empatica Update',
-     #       'Valid Answers Since Trial',
-     #       'Displayed Questions Since Trial',  # <-- NEW
             'NaN ans last 36 hours (%)',
             'NaN ans total (%)',
             'Events last 7 days',
@@ -798,6 +926,7 @@ def show_dashboard():
     selected_user2 = st.selectbox("Select User", user_options2)
 
     if st.button("Get Participant's Data"):
+        # Retrieving and showing Patient's status line
         try:
             user_status = participants_status_df[participants_status_df['nickName'] == selected_user2]
             if not user_status.empty:
@@ -806,21 +935,20 @@ def show_dashboard():
                 st.warning(f"No status found for user {selected_user2}.")
         except Exception as e:
             st.error(f"Failed to retrieve status for user: {e}")
-
+        
+        # Retrieving and showing Patient's events (both from application and from assistant)
         try:
             selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
             patient_id = selected_partici['patientId']
             user_events = pd.DataFrame(event_data)
                      
-            # Step A: Ensure microseconds for any raw string that lacks them
+            #Ensure microseconds for any raw string that lacks them
             user_events['timestamp'] = user_events['timestamp'].apply(
                 lambda x: ensure_microseconds(x) if pd.notnull(x) else x
             )
-
-            # Step B: Convert to datetime
             user_events['timestamp'] = pd.to_datetime(user_events['timestamp'], errors='coerce')
 
-            # (Optional) Step C: Format for display
+            # Format for display
             user_events['timestamp'] = user_events['timestamp'].apply(
                 lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None
             )
@@ -833,7 +961,8 @@ def show_dashboard():
                 st.warning(f"No events found for user {selected_user2}.")
         except Exception as e:
             st.error(f"Failed to retrieve events for user: {e}")
-
+            
+        # Retrieving and showing Patient's scheduled questionnaire answers
         try:
             if questionnaire_df is not None and patient_id:
                 show_questions(patient_id, questionnaire_df)
