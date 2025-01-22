@@ -8,7 +8,25 @@ from firebase_admin import credentials
 from firebase_admin import messaging
 import re
 import datetime
+from forms import (
+    update_participant_form,
+    add_participant_form,
+    add_event_form
+)
 
+
+from data_processing import (
+    transform_questionnaire_data,
+    calculate_percentage_of_nan_questions_last_x_hrs,
+    calculate_percentage_of_nan_questions,
+    calculate_displayed_questions,
+    calculate_num_events,
+    calculate_time_since_last_connection,
+    compute_valid_answers_count    
+)
+
+import datetime
+import pytz
 
 from api import (
     fetch_participants, 
@@ -19,8 +37,6 @@ from api import (
     add_participant_to_db, 
     post_event_to_db
 )
-import datetime
-import pytz
 
 # ----------------------------
 # GLOBALS
@@ -59,10 +75,14 @@ def fetch_participants_data():
             entry['empatica_status'] = entry.pop('empaticaStatus', entry.get('empatica_status', ''))
             entry['num_of_events_current_date'] = entry.pop('numOfEventsCurrentDate', entry.get('num_of_events_current_date', ''))
             entry['is_active'] = entry.pop('isActive', entry.get('is_active', ''))
+            entry['Empatica Wearing Status'] = entry.pop('empaticaWearingStatus', entry.get('Empatica Wearing Status',''))
         return participant_data
     else:
         return None
-
+    
+'''ET  התווסף שדה חדש בשם : empaticaWearingStatus
+הערכים שלו הם : NONE, True,False 
+השדה נותן אינדיקציה האם השעון נלבש כראוי על היד. '''
 # ----------------------------
 # STYLING & FORMATTING
 # ----------------------------
@@ -75,13 +95,58 @@ def highlight_old_updates(row):
     empatica_last_update = pd.to_datetime(row['empatica_last_update'], errors='coerce')
     # Force to tz-aware if not already
     if empatica_last_update is not None and empatica_last_update.tz is None:
-#        empatica_last_update = empatica_last_update.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
         empatica_last_update = empatica_last_update.tz_localize(israel_tz)
     if pd.notnull(empatica_last_update):
         time_diff = current_time - empatica_last_update
         if time_diff.total_seconds() > threshold_hours * 3600:
             return ['background-color: yellow'] * len(row)
     return [''] * len(row)
+
+
+def parse_time_since_str(val: str) -> float:
+    """
+    Convert '8 days, 14.5 Hrs' or '3.2 Hrs' into a float of total hours.
+    Return None if 'N/A' or cannot parse.
+    """
+    if val == "N/A":
+        return None
+    
+    val = val.lower().strip()
+    if "days" in val:
+        # e.g. "8 days, 14.5 hrs"
+        # 1) remove ' hrs'
+        val = val.replace(' hrs', '').replace(' hr', '')
+        # 2) split by 'days,'
+        parts = val.split('days')
+        if len(parts) == 2:
+            days_str = parts[0].strip()           # "8"
+            hours_str = parts[1].replace(',', '') # "14.5"
+            try:
+                d = float(days_str)
+                h = float(hours_str)
+                return d * 24 + h
+            except ValueError:
+                return None
+    else:
+        # e.g. "3.2 hrs"
+        val = val.replace(' hrs', '').replace(' hr', '')
+        try:
+            return float(val)
+        except ValueError:
+            return None
+    
+    return None  # fallback if we couldn't parse
+
+
+def highlight_old_updates_cell(val):
+    """Highlight if the time-since‐update string is more than threshold_hours."""
+    threshold_hours = 10
+    
+    total_hours = parse_time_since_str(val)
+    if total_hours is not None and total_hours > threshold_hours:
+        return 'background-color: yellow;'
+    return ''
+
 
 def format_timestamp_without_subseconds(timestamp):
     """
@@ -91,36 +156,6 @@ def format_timestamp_without_subseconds(timestamp):
         return pd.to_datetime(timestamp).strftime('%Y-%m-%dT%H:%M:%S')
     else:
         return "N/A"
-
-# ----------------------------
-# SHOW PARTICIPANTS DATA
-# ----------------------------
-def refresh_and_display_participants(placeholder):
-    participant_data = fetch_participants_data()
-    event_data = fetch_events_data()
-
-    if participant_data and event_data:
-        participant_df = pd.DataFrame(participant_data)
-        event_df = pd.DataFrame(event_data)
-
-        # Merge the total events count
-        event_counts = event_df.groupby('patientId').size().reset_index(name='num_of_events')
-        participant_df = pd.merge(participant_df, event_counts, how='left', left_on='patientId', right_on='patientId')
-        participant_df['num_of_events'].fillna(0, inplace=True)
-        participant_df['num_of_events'] = participant_df['num_of_events'].astype(int)
-
-        column_order = (
-            ['nickName', 'empatica_status', 'empatica_last_update', 'num_of_events'] + 
-            [col for col in participant_df.columns 
-                if col not in ['nickName', 'empatica_status', 'empatica_last_update', 'num_of_events', 'num_of_events_current_date']
-            ] + ['num_of_events_current_date']
-        )
-        participant_df = participant_df[column_order]
-
-        styled_df = participant_df.style.apply(highlight_old_updates, axis=1)
-        placeholder.dataframe(styled_df, use_container_width=True, hide_index=True)
-    else:
-        st.error("Failed to fetch participants or events data.")
 
 def show_participants_data():
     global participants_placeholder
@@ -133,9 +168,7 @@ def show_participants_data():
         # Format columns
         participant_df['created_at'] = participant_df['created_at'].apply(format_timestamp_without_subseconds)
         participant_df['trial_starting_date'] = participant_df['trial_starting_date'].apply(format_timestamp_without_subseconds)
-
         participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
-
         column_order = [
             'nickName',
             'phone',
@@ -154,201 +187,9 @@ def show_participants_data():
     else:
         st.error("Failed to fetch participants data.")
 
-# ----------------------------
-# QUESTIONNAIRE TIMETABLE
-# ----------------------------
-def transform_questionnaire_data(questionnaire_data):
-    df = pd.DataFrame(questionnaire_data)
-    df.rename(columns={'num': 'מס שאלה', 'type': 'סוג', 'question': 'השאלה'}, inplace=True)
-    days_of_week = {
-        1: 'Sunday', 2: 'Monday', 3: 'Tuesday', 
-        4: 'Wednesday', 5: 'Thursday', 6: 'Friday', 7: 'Saturday'
-    }
-    hours = ['10:00', '14:00', '18:00']
-    timetable = pd.DataFrame(index=hours, columns=days_of_week.values()).fillna('')
-
-    for index, row in df.iterrows():
-        question_number = row['מס שאלה']
-        for day in row['days']:
-            day_name = days_of_week.get(day)
-            for hour in row['hours']:
-                hour_str = f'{hour}:00'
-                cell_value = timetable.at[hour_str, day_name]
-                if str(question_number) not in cell_value.split(', '):
-                    if cell_value == '':
-                        timetable.at[hour_str, day_name] = str(question_number)
-                    else:
-                        timetable.at[hour_str, day_name] += f', {question_number}'
-
-    df = df[['סוג', 'השאלה', 'מס שאלה']]
-    return df, timetable
-
 
 
 israel_tz = pytz.timezone("Asia/Jerusalem")
-
-def calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, hrs):
-    """
-    1) Get unique question numbers displayed in [current_time - hrs, current_time).
-    2) Get unique question numbers answered by user in that same window.
-    3) Percentage of displayed questions that do NOT appear in the answered set.
-
-    Assumes `current_time` is tz-aware in 'Asia/Jerusalem' 
-    and that 'timestamp' in questions_data can be parsed as well.
-    """
-
-    # ----------------------------------------------------------------
-    # STEP 0: Ensure current_time is tz-aware
-    # ----------------------------------------------------------------
-    if current_time.tzinfo is None:
-        # If you want everything in 'Asia/Jerusalem', localize it
-        current_time = israel_tz.localize(current_time)
-
-    # build start_time
-    start_time = current_time - pd.Timedelta(hours=hrs)
-
-    # ----------------------------------------------------------------
-    # STEP A: Gather displayed questions in [start_time, current_time)
-    # ----------------------------------------------------------------
-    displayed_set = set()
-
-    # If you want to keep times tz-aware, ensure .normalize() doesn't drop tz
-    # We'll do it manually:
-    start_day = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    current_day = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    date_range = pd.date_range(
-        start=start_day,
-        end=current_day,
-        freq='D'
-    )
-
-    for day_dt in date_range:
-        # localize this day_dt to 'Asia/Jerusalem' if it's naive
-        if day_dt.tzinfo is None:
-            day_dt = day_dt.tz_localize(israel_tz)
-
-        for hour in timetable_df.index:  # e.g. "10:00", "14:00", ...
-            slot_time_str = f"{day_dt.strftime('%Y-%m-%d')} {hour}"
-            slot_time = pd.to_datetime(slot_time_str, errors='coerce')
-
-            if pd.notnull(slot_time) and slot_time.tzinfo is None:
-                slot_time = slot_time.tz_localize(israel_tz)
-
-            # Now compare slot_time with [start_time, current_time)
-            if slot_time is None or pd.isna(slot_time):
-                continue
-
-            if not (start_time <= slot_time < current_time):
-                continue
-
-            # Check which questions are displayed at (hour, day_of_week)
-            day_of_week = slot_time.strftime('%A')
-            if day_of_week not in timetable_df.columns:
-                continue
-
-            question_set_str = timetable_df.at[hour, day_of_week]
-            if not question_set_str:
-                continue
-
-            # e.g. "5, 7, 12"
-            question_nums = [q.strip() for q in question_set_str.split(',')]
-            for qnum in question_nums:
-                displayed_set.add(qnum)
-
-    displayed_count = len(displayed_set)
-    if displayed_count == 0:
-        # No questions displayed -> 0% unanswered
-        return 0.0
-
-    # ----------------------------------------------------------------
-    # STEP B: Gather answered questions in the past X hours
-    # ----------------------------------------------------------------
-    # Convert questions_data to DataFrame if it's a list
-    if isinstance(questions_data, list):
-        questions_data = pd.DataFrame(questions_data)
-
-    if 'timestamp' not in questions_data.columns or 'questionNum' not in questions_data.columns:
-        raise ValueError("questions_data is missing 'timestamp' or 'questionNum' columns")
-
-    # Convert question timestamps
-    questions_data['timestamp'] = pd.to_datetime(questions_data['timestamp'], errors='coerce')
-
-    # If some rows are naive and you want them also in 'Asia/Jerusalem', do:
-    def localize_if_naive(dt):
-        if pd.notnull(dt) and dt.tzinfo is None:
-            return dt.tz_localize(israel_tz)
-        return dt
-
-    questions_data['timestamp'] = questions_data['timestamp'].apply(localize_if_naive)
-
-    # Filter to [start_time, current_time)
-    answered_in_window = questions_data[
-        (questions_data['timestamp'] >= start_time) &
-        (questions_data['timestamp'] < current_time)
-    ].copy()
-
-    # Build a set of questionNums answered in that window
-    answered_in_window['questionNum'] = answered_in_window['questionNum'].astype(str)
-    answered_set = set(answered_in_window['questionNum'].unique())
-
-    # ----------------------------------------------------------------
-    # STEP C: Compute difference
-    # ----------------------------------------------------------------
-    not_answered = displayed_set - answered_set
-    unanswered_count = len(not_answered)
-
-    unanswered_percentage = (unanswered_count / displayed_count) * 100
-    return unanswered_percentage
-
-
-
-
-def calculate_num_events(event_data, participant_df, days=None):
-    """
-    Return a Series with event counts for each participant, tz-aware approach.
-    """
-    if isinstance(event_data, list):
-        event_data = pd.DataFrame(event_data)
-
-    if 'timestamp' not in event_data.columns:
-        raise ValueError("The 'timestamp' column is missing from event_data.")
-
-    # Convert events to tz-aware
-    event_data['timestamp'] = pd.to_datetime(event_data['timestamp'], errors='coerce')
-   # event_data['timestamp'] = event_data['timestamp'].dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
-    event_data['timestamp'] = event_data['timestamp'].dt.tz_localize(israel_tz)
-
-    if days is not None:
-        cutoff_time = pd.Timestamp.now(tz=israel_tz) - pd.Timedelta(days=days)
-        event_data = event_data[event_data['timestamp'] >= cutoff_time]
-
-    grouped = event_data.groupby('patientId')['timestamp'].agg(['min','max','count'])
-    grouped['days'] = (grouped['max'] - grouped['min']).dt.days + 1
-    grouped['days'] = grouped['days'].replace(0, 1)
-
-    # We'll store the raw count in 'average_daily_events'
-    grouped['average_daily_events'] = grouped['count']
-
-    participant_df = participant_df.set_index('patientId').join(grouped[['average_daily_events']]).reset_index()
-    participant_df['average_daily_events'].fillna(0, inplace=True)
-
-    return participant_df['average_daily_events']
-
-def calculate_time_since_last_connection(empatica_last_update):
-    """
-    Returns hours since last connection, tz-aware.
-    """
-    if pd.isna(empatica_last_update):
-        return float('nan')
-
-    if empatica_last_update.tz is None:
-        # localize it if you stored it as naive
-  #      empatica_last_update = empatica_last_update.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
-        empatica_last_update = empatica_last_update.tz_localize(israel_tz)
-
-    current_time = pd.Timestamp.now(tz=israel_tz)
-    time_diff = current_time - empatica_last_update
-    return time_diff.total_seconds() / 3600
 
 def format_time_since_update(hours):
     if pd.isna(hours):
@@ -359,97 +200,6 @@ def format_time_since_update(hours):
         days = int(hours // 24)
         remaining_hours = hours % 24
         return f"{days} days, {remaining_hours:.1f} Hrs"
-
-# ----------------------------
-# PERCENTAGE NAN (TRIAL RANGE)
-# ----------------------------
-def calculate_percentage_of_nan_questions(questions_data, timetable_df, start_date, end_date):
-    """
-    % of unanswered within a date range [start_date, end_date], tz-aware.
-    """
-    df = pd.DataFrame(questions_data)
-    if df.empty:
-        return 100.0
-
-    # Convert to tz-aware
-    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-    df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz)
-
-
-
-    # Convert the start_date / end_date to tz-aware if naive
-    start_date = pd.to_datetime(start_date, errors='coerce')
-    if start_date is not None and start_date.tzinfo is None:
-        start_date = israel_tz.localize(start_date)
-
-    end_date = pd.to_datetime(end_date, errors='coerce')
-    if end_date is not None and end_date.tzinfo is None:
-        end_date = israel_tz.localize(end_date)
-
-    if pd.isna(start_date) or pd.isna(end_date):
-        return 100.0  # if we can't parse the dates, fallback
-
-    df_filtered = df[(df['timestamp'] >= start_date) & (df['timestamp'] <= end_date)]
-
-    # Convert answers to numeric
-    df_filtered['answer'] = pd.to_numeric(df_filtered['answer'], errors='coerce')
-    valid_answers_count = df_filtered['answer'].between(0, 4, inclusive='both').sum()
-
-    # How many were scheduled in that date range?
-    total_questions_displayed = calculate_displayed_questions(timetable_df, start_date, end_date)
-
-    if total_questions_displayed == 0:
-        return 100.0
-
-    unanswered_percentage = 100.0 * (1 - (valid_answers_count / total_questions_displayed))
-    return int(round(unanswered_percentage))
-
-def calculate_displayed_questions(timetable_df, start_date, end_date):
-    """
-    How many questions were scheduled from start_date to end_date, tz-aware.
-    """
-    start_date = start_date.tz_convert("Asia/Jerusalem")
-    end_date = end_date.tz_convert("Asia/Jerusalem")
-    # Ensure tz-aware
-    if start_date.tzinfo is None:
-        start_date = israel_tz.localize(start_date)
-    if end_date.tzinfo is None:
-        end_date = israel_tz.localize(end_date)
-    if end_date < start_date:
-        end_date = start_date + pd.Timedelta(hours=36)
-
-    total_questions_displayed = 0
-    # If start_date and end_date are both tz-aware in Asia/Jerusalem:
-    date_range = pd.date_range(
-        start=start_date, 
-        end=end_date,
-        freq='D'
-    )
-    # No tz parameter needed; Pandas takes the timezone from start/end.
-    days_of_week_map = {0: 'Monday', 1: 'Tuesday', 2: 'Wednesday', 3: 'Thursday',
-                        4: 'Friday', 5: 'Saturday', 6: 'Sunday'}
-
-    for current_day in date_range:
-        day_of_week = current_day.strftime('%A')  # e.g. 'Monday'
-        if day_of_week in timetable_df.columns:
-            for time in timetable_df.index:
-                question_set = timetable_df.at[time, day_of_week]
-                if question_set:
-                    # Build a dt for this date+time
-                    question_time_str = f"{current_day.strftime('%Y-%m-%d')} {time}"
-    #                question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz, ambiguous='NaT', nonexistent='shift_forward')
-                    question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz)
-                    # Now skip if outside the actual [start_date, end_date] range
-                    if question_time < start_date:
-                        continue
-                    if question_time > end_date:
-                        continue
-                    question_list = question_set.split(', ')
-                    total_questions_displayed += len(question_list)
-
-    return total_questions_displayed
-
-
 
 
 def displayed_questions_numbers(timetable_df, start_date, end_date):
@@ -485,7 +235,6 @@ def displayed_questions_numbers(timetable_df, start_date, end_date):
                 if question_set:
                     # Build a dt for this date+time
                     question_time_str = f"{current_day.strftime('%Y-%m-%d')} {time}"
-    #                question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz, ambiguous='NaT', nonexistent='shift_forward')
                     question_time = pd.to_datetime(question_time_str, errors='coerce').tz_localize(israel_tz)
                     # Now skip if outside the actual [start_date, end_date] range
                     if question_time < start_date:
@@ -498,34 +247,6 @@ def displayed_questions_numbers(timetable_df, start_date, end_date):
     return total_questions_displayed
 
 
-
-def compute_valid_answers_count(questions_data, start_date, end_date):
-    """
-    Number of valid answers (0-4) in [start_date, end_date], tz-aware.
-    """
-    df = pd.DataFrame(questions_data)
-    if df.empty:
-        return 0
-
-    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-#   df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
-    df['timestamp'] = df['timestamp'].dt.tz_localize(israel_tz)
- 
-
-    # localize start/end if needed
-    start_date = pd.to_datetime(start_date, errors='coerce')
-    if start_date is not None and start_date.tzinfo is None:
-        start_date = israel_tz.localize(start_date)
-
-    end_date = pd.to_datetime(end_date, errors='coerce')
-    if end_date is not None and end_date.tzinfo is None:
-        end_date = israel_tz.localize(end_date)
-
-    df_filtered = df[(df['timestamp'] >= start_date) & (df['timestamp'] <= end_date)]
-    df_filtered['answer'] = pd.to_numeric(df_filtered['answer'], errors='coerce')
-    valid_answers_count = df_filtered['answer'].between(0, 4, inclusive='both').sum()
-    return int(valid_answers_count)
-
 # ----------------------------
 # FETCH & SHOW PARTICIPANTS STATUS
 # ----------------------------
@@ -533,6 +254,7 @@ def fetch_participants_status(participant_data, event_data):
     """
     Builds a DataFrame of participants' status, including:
       - Time since last Empatica update
+      - Empatica Wearing Status
       - % unanswered last 36 hours
       - % unanswered total
       - Valid answers since trial start
@@ -633,6 +355,7 @@ def fetch_participants_status(participant_data, event_data):
         column_order = [
             'nickName',
             'Time Since Empatica Update',
+            'Empatica Wearing Status',
             'NaN ans last 36 hours (%)',
             'NaN ans total (%)',
             'Events last 7 days',
@@ -644,139 +367,44 @@ def fetch_participants_status(participant_data, event_data):
         st.error("Failed to fetch participant or event data.")
         return None
 
+def highlight_if_above(val, threshold):
+    """
+    Return a highlight style if val > threshold, else no styling.
+    """
+    if pd.notnull(val) and val > threshold:
+        return 'background-color: yellow;'
+    return ''
+
 def show_participants_status(participants_status_df):
-    global status_placeholder
     if participants_status_df is not None:
-        status_placeholder.dataframe(participants_status_df, use_container_width=True, hide_index=True)
+        styled_df = (
+            participants_status_df.style
+            # 1) Still highlight Time Since Empatica Update as before
+            .applymap(highlight_old_updates_cell, subset=['Time Since Empatica Update'])
+            
+            # 2) Highlight "NaN ans last 36 hours (%)" if > 70
+            .applymap(lambda x: highlight_if_above(x, 70), 
+                      subset=["NaN ans last 36 hours (%)"])
+
+            # 3) Highlight "NaN ans total (%)" if > 50
+            .applymap(lambda x: highlight_if_above(x, 50), 
+                      subset=["NaN ans total (%)"])
+
+            # 4) Highlight "Events last 7 days" if > 7
+            .applymap(lambda x: highlight_if_above(x, 7), 
+                      subset=["Events last 7 days"])
+
+            # 5) Finally format certain columns as integers (if desired)
+            .format({
+                "NaN ans last 36 hours (%)": "{:.0f}",
+                "NaN ans total (%)": "{:.0f}",
+                "Events last 7 days": "{:.0f}",
+                "Events total": "{:.0f}",
+            })
+        )
+        status_placeholder.dataframe(styled_df, use_container_width=True, hide_index=True)
     else:
         st.error("Failed to fetch participants status data.")
-
-# ----------------------------
-# FORMS
-# ----------------------------
-def add_participant_form(form_expander):
-    with st.form("new_participant_form"):
-        nickName = st.text_input("Nickname")
-        phone = st.text_input("Phone")
-        empaticaId = st.text_input("Empatica ID")
-        firebaseId = st.text_input("Firebase ID")
-        trialStartingDate = st.date_input("Trial Starting Date (Date)", key="trialStartingDate_date-Add")
-        trialStartingTime = st.time_input("Trial Starting Time", key="trialStartingDate_time-Add")
-
-        submit_button = st.form_submit_button("Submit")
-        if submit_button:
-            if trialStartingDate and trialStartingTime:
-                trial_dt = datetime.datetime.combine(trialStartingDate, trialStartingTime)
-                # Convert to ISO format with timezone if you want
-                trial_dt_aware = israel_tz.localize(trial_dt)  
-                trialStartingDateTimeStr = trial_dt_aware.isoformat()
-            else:
-                trialStartingDateTimeStr = None
-
-            response = add_participant_to_db(nickName, phone, empaticaId, firebaseId, trialStartingDateTimeStr)
-            if response.status_code == 201:
-                st.success("Participant added successfully!")
-                form_expander.empty()
-                participant_data = fetch_participants_data()
-                show_participants_data()
-                event_data = fetch_events_data()
-                participants_status_df = fetch_participants_status(participant_data, event_data)
-                show_participants_status(participants_status_df)
-            else:
-                st.error(f"Failed to add participant. Status code: {response.status_code}")
-
-def update_participant_form(container):
-    with st.form("update_participant_form"):
-        patientId = st.text_input("Patient ID", key="patientId")
-        nickName = st.text_input("Nickname", key="nickName")
-        phone = st.text_input("Phone", key="phone")
-        empaticaId = st.text_input("Empatica ID", key="empaticaId")
-        firebaseId = st.text_input("Firebase ID", key="firebaseId")
-        trialStartingDate = st.date_input("Trial Starting Date (Date)", key="trialStartingDate_date-Update")
-        trialStartingTime = st.time_input("Trial Starting Time", key="trialStartingDate_time-Update")
-        isActive = st.selectbox("Is Active", [True, False], key="isActive")
-
-        submit_button = st.form_submit_button("Submit Update")
-        if submit_button:
-            if trialStartingDate and trialStartingTime:
-                trial_dt = datetime.datetime.combine(trialStartingDate, trialStartingTime)
-                trial_dt_aware = israel_tz.localize(trial_dt)
-                trialStartingDateTimeStr = trial_dt_aware.isoformat()
-            else:
-                trialStartingDateTimeStr = None
-
-            updates = {
-                "patientId": patientId,
-                **({"nickName": nickName} if nickName else {}),
-                **({"phone": phone} if phone else {}),
-                **({"empaticaId": empaticaId} if empaticaId else {}),
-                **({"firebaseId": firebaseId} if firebaseId else {}),
-                **({"trialStartingDate": trialStartingDateTimeStr} if trialStartingDateTimeStr else {}),
-                **({"isActive": isActive} if isActive is not None else {})
-            }
-            response = update_participant_to_db(patientId, updates)
-            if response.status_code == 200:
-                st.success("Participant updated successfully!")
-                st.session_state['show_update_participant_form'] = False
-                container.empty()
-                participant_data = fetch_participants_data()
-                show_participants_data()
-                event_data = fetch_events_data()
-                participants_status_df = fetch_participants_status(participant_data, event_data)
-                show_participants_status(participants_status_df)
-            else:
-                st.error(f"Failed to update participant. Status code: {response.status_code}")
-
-def add_event_form(form_expander):
-    participant_data = fetch_participants_data()
-    participant_df = pd.DataFrame(participant_data)
-    
-    with st.form("add_event_form"):
-        selected_user = st.selectbox("Select Participant", participant_df['nickName'])
-        eventType = st.selectbox("Event Type", ["dissociation", "sadness", "anger", "anxiety", "other" ])   
-        activity = st.selectbox("Activity", ["rest", "eating", "exercise", "other"])
-        severity = st.slider("Severity", 0, 4, 3)
-        eventDate = st.date_input("Event Date (Date)", key="eventDate_date-Add")
-        eventTime = st.time_input("Event Time", key="eventDate_time-Add")
-
-        submit_button = st.form_submit_button("Submit")
-        if submit_button:
-            if eventDate and eventTime:
-                # 1) Combine into a naive datetime
-                event_dt = datetime.datetime.combine(eventDate, eventTime)
-                
-                # 2) Localize to Israel time
-                israel_tz = pytz.timezone("Asia/Jerusalem")
-                event_dt_aware = israel_tz.localize(event_dt)
-                
-                # 3) Convert to UTC
-                event_dt_utc = event_dt_aware.astimezone(pytz.utc)
-                
-                # 4) Format as 'yyyy-MM-dd HH:mm:ss.SSSZ' with 3 decimal places
-                #    e.g. "2025-01-01 15:00:00.123Z"
-                #    We'll format microseconds and then slice off to 3 decimals:
-                eventDateTimeStr = event_dt_utc.strftime("%Y-%m-%d %H:%M:%S.%fZ")
-
-            else:
-                eventDateTimeStr = None
-
-            st.write(f"Combined Datetime: {eventDateTimeStr}")
-            
-            lat = 0.0
-            long = 0.0            
-            selected_participant = participant_df[participant_df['nickName'] == selected_user].iloc[0]
-            patientId = selected_participant['patientId']
-            deviceId = patientId
-            location = {"lat": lat, "long": long}
-            origin = "assistant"
-
-            response = post_event_to_db(patientId, deviceId, eventDateTimeStr, location, eventType, activity, severity, origin)
-            if response.status_code == 201:
-                st.success("Event posted successfully!")
-                form_expander.empty()
-            else:
-                st.error(f"Failed to post event. Status code: {response.status_code}")
-
 # ----------------------------
 # SHOW QUESTIONS + EVENTS
 # ----------------------------
@@ -798,7 +426,6 @@ def show_questions(patient_id, questionnaire_df):
             if parsed_ts is not None and not pd.isna(parsed_ts):
                 if parsed_ts.tzinfo is None:
                     parsed_ts = israel_tz.localize(parsed_ts)
- #                   parsed_ts = israel_tz.localize(parsed_ts, nonexistent='shift_forward', ambiguous='NaT')
                 formatted_ts = parsed_ts.strftime('%Y-%m-%d %H:%M:%S %Z')
             else:
                 formatted_ts = "Invalid or missing"
@@ -849,6 +476,13 @@ def ensure_microseconds(ts):
         # If no offset or 'Z' found, just append .000000
         return ts_str + '.000000'
     
+def update_participant_data_status_display():
+    participant_data = fetch_participants_data()
+    show_participants_data()
+    event_data = fetch_events_data()
+    participants_status_df = fetch_participants_status(participant_data, event_data)
+    show_participants_status(participants_status_df)
+
 
 def display_events_data(event_data, participant_data):
     participant_df = pd.DataFrame(participant_data)
@@ -906,10 +540,14 @@ def show_dashboard():
     show_participants_data()
 
     with st.expander("Add New Participant"):
-        add_participant_form(st)
+        if add_participant_form(st) == True:
+            update_participant_data_status_display()
 
     with st.expander("Update Participant"):
-        update_participant_form(st)
+        # If the button was pressed, we updated the displayed data
+        if update_participant_form(st) == True:
+            update_participant_data_status_display()
+
 
     if st.button('Refresh Data', key='refresh_button1'):
         st.cache_data.clear()
@@ -919,7 +557,7 @@ def show_dashboard():
     else:
         questionnaire_df, timetable_df = None, None
 
-    # 3. retrieve participant's data
+    # 3. retrieve specific participant's data
     st.subheader("Retrieve Participant's Data")
     participant_df = pd.DataFrame(participant_data)
     user_options2 = participant_df['nickName'].tolist()
@@ -973,7 +611,7 @@ def show_dashboard():
     # 4. Post Event
     st.subheader("Post Event")
     with st.expander("Add Event"):
-        add_event_form(st)
+        add_event_form(st, participant_data)
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
