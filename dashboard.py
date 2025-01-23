@@ -46,6 +46,7 @@ participants_placeholder = None
 
 # Set a global timezone for the entire app
 israel_tz = pytz.timezone('Asia/Jerusalem')
+UTC_tz = pytz.timezone('Etc/GMT')
 
 # Initialize the Firebase Admin SDK
 if not firebase_admin._apps:
@@ -95,7 +96,7 @@ def highlight_old_updates(row):
     empatica_last_update = pd.to_datetime(row['empatica_last_update'], errors='coerce')
     # Force to tz-aware if not already
     if empatica_last_update is not None and empatica_last_update.tz is None:
-        empatica_last_update = empatica_last_update.tz_localize(israel_tz)
+        empatica_last_update = empatica_last_update.tz_localize(UTC_tz)
     if pd.notnull(empatica_last_update):
         time_diff = current_time - empatica_last_update
         if time_diff.total_seconds() > threshold_hours * 3600:
@@ -267,8 +268,11 @@ def fetch_participants_status(participant_data, event_data):
 
         # Convert empatica_last_update to tz-aware
         participant_df['empatica_last_update'] = pd.to_datetime(participant_df['empatica_last_update'], errors='coerce')
+        #participant_df['empatica_last_update'] = participant_df['empatica_last_update'].apply(
+        #    lambda x: x.tz_localize(israel_tz) if pd.notnull(x) and x.tzinfo is None else x
+        #)        
         participant_df['empatica_last_update'] = participant_df['empatica_last_update'].apply(
-            lambda x: x.tz_localize(israel_tz) if pd.notnull(x) and x.tzinfo is None else x
+            lambda x: x.tz_localize(UTC_tz) if pd.notnull(x) and x.tzinfo is None else x
         )
 
         # Add columns

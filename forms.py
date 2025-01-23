@@ -110,7 +110,6 @@ def add_event_form(form_expander, participant_data):
                 event_dt = datetime.datetime.combine(eventDate, eventTime)
                 
                 # 2) Localize to Israel time
-                israel_tz = pytz.timezone("Asia/Jerusalem")
                 event_dt_aware = israel_tz.localize(event_dt)
                 
                 # 3) Convert to UTC

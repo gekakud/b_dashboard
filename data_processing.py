@@ -4,6 +4,7 @@ import pytz
 
 # Set a global timezone for the entire app
 israel_tz = pytz.timezone('Asia/Jerusalem')
+UTC_tz = pytz.timezone('Etc/GMT')
 
 
 # ----------------------------
@@ -312,7 +313,7 @@ def calculate_time_since_last_connection(empatica_last_update):
     if empatica_last_update.tz is None:
         # localize it if you stored it as naive
   #      empatica_last_update = empatica_last_update.tz_localize(israel_tz, nonexistent='shift_forward', ambiguous='NaT')
-        empatica_last_update = empatica_last_update.tz_localize(israel_tz)
+        empatica_last_update = empatica_last_update.tz_localize(UTC_tz)
 
     current_time = pd.Timestamp.now(tz=israel_tz)
     time_diff = current_time - empatica_last_update
