@@ -158,6 +158,22 @@ def format_timestamp_without_subseconds(timestamp):
     else:
         return "N/A"
 
+def format_timestamp_without_subseconds_IST(timestamp_str):
+    """
+    Parse timestamp_str as UTC, then convert and format in Israel time.
+    """
+    if pd.notnull(timestamp_str):
+        # 1) Parse as datetime
+        dt_utc = pd.to_datetime(timestamp_str, utc=True, errors='coerce')
+        
+        # 2) Convert from UTC to Israel local time
+        dt_israel = dt_utc.tz_convert(israel_tz)
+        
+        # 3) Format
+        return dt_israel.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        return "N/A"
+
 def show_participants_data():
     global participants_placeholder
     participant_data = fetch_participants()
@@ -167,8 +183,8 @@ def show_participants_data():
         participant_df = pd.DataFrame(participant_data)
 
         # Format columns
-        participant_df['created_at'] = participant_df['created_at'].apply(format_timestamp_without_subseconds)
-        participant_df['trial_starting_date'] = participant_df['trial_starting_date'].apply(format_timestamp_without_subseconds)
+        participant_df['created_at'] = participant_df['created_at'].apply(format_timestamp_without_subseconds_IST)
+        participant_df['trial_starting_date'] = participant_df['trial_starting_date'].apply(format_timestamp_without_subseconds_IST)
         participant_df['Events total'] = calculate_num_events(event_data, participant_df, days=None)
         column_order = [
             'nickName',
@@ -188,9 +204,6 @@ def show_participants_data():
     else:
         st.error("Failed to fetch participants data.")
 
-
-
-israel_tz = pytz.timezone("Asia/Jerusalem")
 
 def format_time_since_update(hours):
     if pd.isna(hours):
@@ -416,6 +429,7 @@ def show_questions(patient_id, questionnaire_df):
     questions_data = get_questions(patient_id)
     if questions_data and questionnaire_df is not None:
         timestamps = []
+        question_nums = []
         question_texts = []
         answers = []
 
@@ -435,12 +449,14 @@ def show_questions(patient_id, questionnaire_df):
                 formatted_ts = "Invalid or missing"
 
             timestamps.append(formatted_ts)
+            question_nums.append(question_num)
             question_texts.append(question_text)
             answers.append(answer)
 
         if timestamps:
             questions_df = pd.DataFrame({
                 'Timestamp': timestamps,
+                'Num': question_nums,
                 'Question': question_texts,
                 'Answer': answers
             })
