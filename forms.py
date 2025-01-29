@@ -20,16 +20,28 @@ def update_participant_form(container):
         phone = st.text_input("Phone", key="phone")
         empaticaId = st.text_input("Empatica ID", key="empaticaId")
         firebaseId = st.text_input("Firebase ID", key="firebaseId")
-        trialStartingDate = st.date_input("Trial Starting Date (Date)", key="trialStartingDate_date-Update")
-        trialStartingTime = st.time_input("Trial Starting Time", key="trialStartingDate_time-Update")
+        
+        # TEXT inputs instead of date_input/time_input
+        trial_date_str = st.text_input("Trial Starting Date (YYYY-MM-DD) [optional]", key="trial_date_str")
+        trial_time_str = st.text_input("Trial Starting Time (HH:MM) [optional]", key="trial_time_str")
+        
+ #       trialStartingDate = st.date_input("Trial Starting Date (Date)", key="trialStartingDate_date-Update")
+ #      trialStartingTime = st.time_input("Trial Starting Time", key="trialStartingDate_time-Update")
         isActive = st.selectbox("Is Active", [True, False], key="isActive")
 
         submit_button = st.form_submit_button("Submit Update")
         if submit_button:
-            if trialStartingDate and trialStartingTime:
-                trial_dt = datetime.datetime.combine(trialStartingDate, trialStartingTime)
-                trial_dt_aware = israel_tz.localize(trial_dt)
-                trialStartingDateTimeStr = trial_dt_aware.isoformat()
+            # Parse the date/time only if the user actually entered them
+            if trial_date_str and trial_time_str:
+                try:
+                    trial_date = datetime.datetime.strptime(trial_date_str, "%Y-%m-%d").date()
+                    trial_time = datetime.datetime.strptime(trial_time_str, "%H:%M").time()
+                    trial_dt = datetime.datetime.combine(trial_date, trial_time)
+                    trial_dt_aware = israel_tz.localize(trial_dt)
+                    trialStartingDateTimeStr = trial_dt_aware.isoformat()
+                except ValueError:
+                    st.error("Invalid date/time format. Please use YYYY-MM-DD and HH:MM.")
+                    return False
             else:
                 trialStartingDateTimeStr = None
 
@@ -40,7 +52,7 @@ def update_participant_form(container):
                 **({"empaticaId": empaticaId} if empaticaId else {}),
                 **({"firebaseId": firebaseId} if firebaseId else {}),
                 **({"trialStartingDate": trialStartingDateTimeStr} if trialStartingDateTimeStr else {}),
-                **({"isActive": isActive} if isActive is not None else {})
+                **({"isActive": isActive} if isActive is not None else {}),
             }
             response = update_participant_to_db(patientId, updates)
             if response.status_code == 200:
