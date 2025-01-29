@@ -392,6 +392,14 @@ def highlight_if_above(val, threshold):
         return 'background-color: yellow;'
     return ''
 
+def highlight_if_below(val, threshold):
+    """
+    Return a highlight style if val > threshold, else no styling.
+    """
+    if pd.notnull(val) and float(val) < threshold:
+        return 'background-color: yellow;'
+    return ''
+
 def show_participants_status(participants_status_df):
     if participants_status_df is not None:
         styled_df = (
@@ -411,7 +419,11 @@ def show_participants_status(participants_status_df):
             .applymap(lambda x: highlight_if_above(x, 7), 
                       subset=["Events last 7 days"])
 
-            # 5) Finally format certain columns as integers (if desired)
+            # 4) Highlight "Events last 7 days" if > 7
+            .applymap(lambda x: highlight_if_below(x, 75), 
+                      subset=["Empatica Wearing Status"])
+            
+            # 6) Finally format certain columns as integers (if desired)
             .format({
                 "NaN ans last 36 hours (%)": "{:.0f}",
                 "NaN ans total (%)": "{:.0f}",
