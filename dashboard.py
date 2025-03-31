@@ -326,7 +326,10 @@ def fetch_participants_status(participant_data, event_data):
             if questions_data:
                 # 1. last 36 hours unanswered
                 current_time = pd.Timestamp.now(tz=israel_tz)
-                perc_36_hrs = calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, 36)
+                hours_since_start = (current_time - patient_start_trial).total_seconds() / 3600.0
+                hours_to_calc = min(36, hours_since_start)
+
+                perc_36_hrs = calculate_percentage_of_nan_questions_last_x_hrs(questions_data, timetable_df, current_time, hrs=hours_to_calc)
 
                 # 2. total unanswered from trial start
                 perc_total = calculate_percentage_of_nan_questions(questions_data, timetable_df, patient_start_trial, total_end_date)
@@ -538,6 +541,38 @@ def display_events_data(event_data, participant_data):
     #    events_df['timestamp'] = events_df['timestamp'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None)
 
         merged_df = pd.merge(events_df, participant_df[['patientId', 'nickName']], on='patientId', how='left')
+        
+        # Convert trial start column to datetime
+        participant_df['trial_starting_date'] = pd.to_datetime(participant_df['trial_starting_date'], errors='coerce')
+
+        # Localize trial start if naive
+        participant_df['trial_starting_date'] = participant_df['trial_starting_date'].apply(
+            lambda x: israel_tz.localize(x) if pd.notnull(x) and x.tzinfo is None else x
+        )
+
+        # Merge trial start into merged_df
+        merged_df = pd.merge(
+            merged_df,
+            participant_df[['patientId', 'trial_starting_date']],
+            on='patientId',
+            how='left'
+        )
+
+        # Convert events_df timestamp to datetime again just in case (safe step)
+        merged_df['timestamp'] = pd.to_datetime(merged_df['timestamp'], errors='coerce')
+
+        # Localize if needed
+        merged_df['timestamp'] = merged_df['timestamp'].apply(
+            lambda x: israel_tz.localize(x) if pd.notnull(x) and x.tzinfo is None else x
+        )
+
+        # Keep only events after trial start
+        merged_df = merged_df[
+            (pd.notnull(merged_df['trial_starting_date'])) &
+            (merged_df['timestamp'] >= merged_df['trial_starting_date'])
+        ]
+
+        
         if 'deviceId' in merged_df.columns:
             merged_df.drop(columns=['deviceId'], inplace=True)
 
@@ -610,20 +645,50 @@ def show_dashboard():
         try:
             selected_partici = participant_df[participant_df['nickName'] == selected_user2].iloc[0]
             patient_id = selected_partici['patientId']
-            user_events = pd.DataFrame(event_data)
+            # user_events = pd.DataFrame(event_data)
                      
-            #Ensure microseconds for any raw string that lacks them
+            # #Ensure microseconds for any raw string that lacks them
+            # user_events['timestamp'] = user_events['timestamp'].apply(
+            #     lambda x: ensure_microseconds(x) if pd.notnull(x) else x
+            # )
+            # user_events['timestamp'] = pd.to_datetime(user_events['timestamp'], errors='coerce')
+
+            # # Format for display
+            # user_events['timestamp'] = user_events['timestamp'].apply(
+            #     lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None
+            # )
+         
+            user_events = pd.DataFrame(event_data)
+
+            # Ensure microseconds
             user_events['timestamp'] = user_events['timestamp'].apply(
                 lambda x: ensure_microseconds(x) if pd.notnull(x) else x
             )
             user_events['timestamp'] = pd.to_datetime(user_events['timestamp'], errors='coerce')
 
+            # Localize to Israel timezone if naive
+            user_events['timestamp'] = user_events['timestamp'].apply(
+                lambda x: israel_tz.localize(x) if pd.notnull(x) and x.tzinfo is None else x
+            )
+
+            # Filter by patient ID
+            user_events = user_events[user_events['patientId'] == patient_id]
+
+            # Trial start parsing
+            trial_start_str = selected_partici.get('trial_starting_date', None)
+            trial_start = pd.to_datetime(trial_start_str, errors='coerce')
+            if pd.notnull(trial_start) and trial_start.tzinfo is None:
+                trial_start = israel_tz.localize(trial_start)
+
+            # Filter by trial start
+            user_events = user_events[user_events['timestamp'] >= trial_start]
+
             # Format for display
             user_events['timestamp'] = user_events['timestamp'].apply(
                 lambda x: x.strftime('%Y-%m-%d %H:%M:%S %Z') if pd.notnull(x) else None
             )
-         
-            user_events = user_events[user_events['patientId'] == patient_id]
+
+
             if not user_events.empty:
                 user_events_sorted = user_events.sort_values(by='timestamp', ascending=False)
                 st.dataframe(user_events_sorted, use_container_width=True, hide_index=True)

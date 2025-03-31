@@ -303,6 +303,89 @@ def calculate_num_events(event_data, participant_df, days=None):
     # Return the final Series aligned with participant_df rows
     return merged['num_events']
 
+
+import pandas as pd
+import pytz
+
+israel_tz = pytz.timezone("Asia/Jerusalem")
+
+def calculate_num_events_since_trial(event_data, participant_df):
+    """
+    Returns a Pandas Series with the count of events per participant,
+    counting only events that occur on or after that participant's trial_starting_date.
+    If a participant's trial_starting_date is missing or invalid, it defaults to 0 events.
+    """
+    # If event_data is a list, convert to DataFrame
+    if isinstance(event_data, list):
+        event_data = pd.DataFrame(event_data)
+
+    # Must have these columns
+    if 'timestamp' not in event_data.columns:
+        raise ValueError("event_data must have a 'timestamp' column.")
+    if 'patientId' not in event_data.columns:
+        raise ValueError("event_data must have a 'patientId' column.")
+    if 'trial_starting_date' not in participant_df.columns:
+        raise ValueError("participant_df must have a 'trial_starting_date' column.")
+
+    # 1) Parse event timestamps
+    event_data = event_data.copy()  # to avoid mutating original
+    event_data['timestamp'] = pd.to_datetime(event_data['timestamp'], errors='coerce')
+
+    # localize any naive datetimes to Israel time if you want
+    event_data['timestamp'] = event_data['timestamp'].apply(
+        lambda dt: dt.tz_localize(israel_tz) if pd.notnull(dt) and dt.tzinfo is None else dt
+    )
+
+    # 2) Parse participant_df trial_starting_date
+    participant_df = participant_df.copy()
+    participant_df['trial_starting_date'] = pd.to_datetime(
+        participant_df['trial_starting_date'], 
+        errors='coerce'
+    )
+    # localize if naive
+    participant_df['trial_starting_date'] = participant_df['trial_starting_date'].apply(
+        lambda dt: dt.tz_localize(israel_tz) if pd.notnull(dt) and dt.tzinfo is None else dt
+    )
+
+    # 3) Merge event_data with each participant's trial_start
+    merged = pd.merge(
+        event_data,
+        participant_df[['patientId', 'trial_starting_date']],
+        on='patientId',
+        how='left'
+    )
+
+    # 4) Filter to only events after the participant's trial_starting_date
+    # If trial_starting_date is NaT, the comparison is False => row is dropped
+    merged = merged[
+        (merged['timestamp'].notnull()) &
+        (merged['trial_starting_date'].notnull()) &
+        (merged['timestamp'] >= merged['trial_starting_date'])
+    ]
+
+    # 5) Group by patientId to count how many remain
+    event_counts = (
+        merged.groupby('patientId')['timestamp']
+        .count()
+        .rename('num_events_since_trial')
+        .reset_index()
+    )
+    # event_counts has ['patientId', 'num_events_since_trial']
+
+    # 6) Merge back with participant_df to get 0 for participants lacking events
+    final_merged = pd.merge(
+        participant_df,
+        event_counts,
+        on='patientId',
+        how='left'
+    )
+    final_merged['num_events_since_trial'] = final_merged['num_events_since_trial'].fillna(0)
+
+    # 7) Return as a Series aligned to participant_df
+    return final_merged['num_events_since_trial']
+
+
+
 def calculate_time_since_last_connection(empatica_last_update):
     """
     Returns hours since last connection, tz-aware.
